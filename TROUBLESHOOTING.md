@@ -49,7 +49,9 @@ Lantern does not convert video or audio. The TV receives the original streams an
 
 The menu-bar icon provides start/stop controls. Sharing does not start automatically or install a login/background service. Quit Lantern to stop it.
 
-Lantern prevents idle system sleep while sharing, but cannot override closing the lid or putting the Mac to sleep manually. Keep its lid open while watching.
+Leaving sharing enabled does not prevent sleep. Lantern prevents idle system sleep while the TV browses the library or receives video, and for 15 minutes after that activity ends. Each successful library Browse request or video transfer restarts the grace period. Discovery, routine status/HEAD checks, and subtitle downloads do not count. A TV that automatically browses in the background can extend the grace period. Stopping sharing releases sleep prevention immediately.
+
+Wake the Mac before browsing or playing on the TV. You may need to reopen the TV's source browser afterward. Lantern observes transfers, not the TV's exact play/pause state: a long pause or more than 15 minutes of fully buffered playback can allow the Mac to sleep. The display can turn off, but closing the lid or manually putting the Mac to sleep may still interrupt playback.
 
 Use **Refresh** after adding, deleting, or replacing videos. Do this before playback because refreshing an active library restarts sharing.
 

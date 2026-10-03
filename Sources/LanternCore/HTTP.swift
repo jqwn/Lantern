@@ -16,6 +16,7 @@ public struct HTTPResponse {
     public var file: URL?
     public var offset: UInt64 = 0
     public var count: UInt64 = 0
+    var isLibraryBrowse = false
 
     public init(_ status: Int = 200, text: String = "", type: String = "text/xml; charset=utf-8", headers: [String: String] = [:]) {
         self.status = status
@@ -65,10 +66,14 @@ public final class HTTPServer {
     private let queue: DispatchQueue
     private var listener: NWListener?
     private var clients: [UUID: HTTPClient] = [:]
+    private var activePlaybackRequests = 0
+    private var playbackIdleTimer: DispatchSourceTimer?
+    private let playbackIdleTimeout: TimeInterval
     public var handler: ((HTTPRequest) -> HTTPResponse)?
     public var state: ((Result<UInt16, Error>) -> Void)?
+    public var playbackActivity: ((Bool) -> Void)?
 
-    public init(queue: DispatchQueue) { self.queue = queue }
+    public init(queue: DispatchQueue, playbackIdleTimeout: TimeInterval = 15 * 60) { self.queue = queue; self.playbackIdleTimeout = playbackIdleTimeout }
 
     public func start(address: String, port: UInt16) throws {
         let parameters = NWParameters.tcp
@@ -86,7 +91,27 @@ public final class HTTPServer {
         listener.newConnectionHandler = { [weak self] connection in
             guard let self, self.clients.count < 48 else { connection.cancel(); return }
             let id = UUID()
-            let client = HTTPClient(connection: connection, queue: self.queue, handler: { [weak self] in self?.handler?($0) ?? HTTPResponse(503) }, finished: { [weak self] in self?.clients.removeValue(forKey: id) })
+            let client = HTTPClient(connection: connection, queue: self.queue, handler: { [weak self] in self?.handler?($0) ?? HTTPResponse(503) }, playbackRequest: { [weak self] started in
+                guard let self else { return }
+                if started {
+                    self.activePlaybackRequests += 1
+                    self.playbackIdleTimer?.cancel(); self.playbackIdleTimer = nil
+                    if self.activePlaybackRequests == 1 { self.playbackActivity?(true) }
+                } else {
+                    self.activePlaybackRequests -= 1
+                    if self.activePlaybackRequests == 0 {
+                        let timer = DispatchSource.makeTimerSource(queue: self.queue)
+                        self.playbackIdleTimer = timer
+                        timer.schedule(deadline: .now() + self.playbackIdleTimeout)
+                        timer.setEventHandler { [weak self] in
+                            guard let self else { return }
+                            self.playbackIdleTimer?.cancel(); self.playbackIdleTimer = nil
+                            self.playbackActivity?(false)
+                        }
+                        timer.resume()
+                    }
+                }
+            }, finished: { [weak self] in self?.clients.removeValue(forKey: id) })
             self.clients[id] = client
             client.start()
         }
@@ -98,6 +123,8 @@ public final class HTTPServer {
         let active = Array(clients.values)
         clients.removeAll()
         active.forEach { $0.close() }
+        playbackIdleTimer?.cancel(); playbackIdleTimer = nil
+        playbackActivity?(false)
     }
 }
 
@@ -105,15 +132,17 @@ private final class HTTPClient {
     let connection: NWConnection
     let queue: DispatchQueue
     let handler: (HTTPRequest) -> HTTPResponse
+    let playbackRequest: (Bool) -> Void
     let finished: () -> Void
     var buffer = Data()
     var file: FileHandle?
     var remaining: UInt64 = 0
     var timer: DispatchSourceTimer?
     var closed = false
+    var playbackRequestActive = false
 
-    init(connection: NWConnection, queue: DispatchQueue, handler: @escaping (HTTPRequest) -> HTTPResponse, finished: @escaping () -> Void) {
-        self.connection = connection; self.queue = queue; self.handler = handler; self.finished = finished
+    init(connection: NWConnection, queue: DispatchQueue, handler: @escaping (HTTPRequest) -> HTTPResponse, playbackRequest: @escaping (Bool) -> Void, finished: @escaping () -> Void) {
+        self.connection = connection; self.queue = queue; self.handler = handler; self.playbackRequest = playbackRequest; self.finished = finished
     }
 
     func start() {
@@ -175,6 +204,10 @@ private final class HTTPClient {
         bytes.append(Data((headers.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)\r\n" }.joined() + "\r\n").utf8))
         if !head && response.file == nil { bytes.append(response.body) }
         let hasFile = !head && response.file != nil
+        if response.isLibraryBrowse || (hasFile && response.count > 0 && response.headers["Content-Type"]?.hasPrefix("video/") == true) {
+            playbackRequestActive = true
+            playbackRequest(true)
+        }
         timer?.schedule(deadline: .now() + 30)
         connection.send(content: bytes, completion: .contentProcessed { [weak self] error in
             guard let self, !self.closed else { return }
@@ -200,6 +233,7 @@ private final class HTTPClient {
         timer?.cancel(); timer = nil
         try? file?.close(); file = nil
         connection.cancel()
+        if playbackRequestActive { playbackRequestActive = false; playbackRequest(false) }
         finished()
     }
 }

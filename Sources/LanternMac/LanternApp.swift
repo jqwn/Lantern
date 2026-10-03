@@ -62,8 +62,8 @@ struct MainView: View {
                     Text("ON YOUR SAMSUNG TV").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     Text("1. Connect to the same home network.\n\n2. Open Connected Devices or Sources.\n\n3. Choose Lantern and browse your videos.\n\n4. Enable subtitles in the player's options.").font(.callout)
                     Spacer()
-                    Label("Mac stays awake while sharing", systemImage: "moon.zzz").font(.caption)
-                    Text("Keep the lid open. Allow Local Network access if macOS asks.").font(.caption).foregroundStyle(.secondary)
+                    Label("Keeps Mac awake while browsing or streaming + 15 minutes", systemImage: "moon.zzz").font(.caption)
+                    Text("Wake your Mac before watching. Closing the lid may interrupt playback.").font(.caption).foregroundStyle(.secondary)
                 }.padding(20).frame(minWidth: 230, idealWidth: 260, maxWidth: 300)
                 VStack(spacing: 0) {
                     HStack {

@@ -58,6 +58,7 @@ final class CoreTests {
         let library = try Library(root: directory)
         let response = SOAP.respond(request("Browse", args: "<ObjectID>0</ObjectID><BrowseFlag>BrowseDirectChildren</BrowseFlag><StartingIndex>0</StartingIndex><RequestedCount>0</RequestedCount>"), service: "ContentDirectory", library: library, base: "http://127.0.0.1")
         #expect(response.status == 200)
+        #expect(response.isLibraryBrowse)
         #expect(XMLParser(data: response.body).parse())
         let didl = library.didl(library.videos, base: "http://127.0.0.1")
         #expect(XMLParser(data: Data(didl.utf8)).parse())
@@ -90,9 +91,14 @@ final class CoreTests {
         let library = try Library(root: directory)
         let invalid = SOAP.respond(request("Browse", args: "<ObjectID>missing</ObjectID>"), service: "ContentDirectory", library: library, base: "http://127.0.0.1")
         #expect(invalid.status == 500)
+        #expect(!invalid.isLibraryBrowse)
         #expect(String(decoding: invalid.body, as: UTF8.self).contains("<errorCode>701</errorCode>"))
         let unknown = SOAP.respond(request("DeleteObject", args: ""), service: "ContentDirectory", library: library, base: "http://127.0.0.1")
         #expect(String(decoding: unknown.body, as: UTF8.self).contains("<errorCode>401</errorCode>"))
+        #expect(!unknown.isLibraryBrowse)
+        let status = SOAP.respond(request("GetSystemUpdateID", args: ""), service: "ContentDirectory", library: library, base: "http://127.0.0.1")
+        #expect(status.status == 200)
+        #expect(!status.isLibraryBrowse)
         for source in [DLNAServer.description(uuid: "test"), SOAP.scpd(service: "ContentDirectory"), SOAP.scpd(service: "ConnectionManager")] {
             #expect(XMLParser(data: Data(source.utf8)).parse())
         }

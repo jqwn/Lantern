@@ -39,7 +39,7 @@ sh test.sh
 
 This runs Swift Testing unit tests and a real-network Python integration test using temporary synthetic files. Integration uses `en0` and requires its active IPv4 LAN address; it briefly advertises a test server and shuts it down afterward.
 
-Use `sh test.sh --unit-only` for the network-independent checks used in CI.
+Use `sh test.sh --unit-only` for the LAN-independent checks used in CI. Playback-activity tests use a loopback HTTP server and a shortened grace period to verify expiry, renewed browsing/streaming, overlapping transfers, and stop cleanup without waiting 15 minutes.
 
 Coverage includes byte ranges, catalogue filtering, XML, SOAP pagination/faults, actual file streaming, Samsung subtitle transport, event subscriptions, callback restrictions, and path/symlink isolation. The script supplies this Command Line Tools installation's Testing framework/plugin paths when necessary. Full Xcode installations use standard Swift Testing instead. Automated protocol checks do not establish compatibility with every TV or media format.
 
@@ -50,6 +50,8 @@ Coverage includes byte ranges, catalogue filtering, XML, SOAP pagination/faults,
 - `lantern-serve`: command-line integration harness: `lantern-serve FOLDER [INTERFACE-IP] [PORT]`.
 
 HTTP byte ranges support seeking. Samsung `CaptionInfo.sec` headers and `sec:CaptionInfoEx` metadata expose external SRT files. Subtitle selections are stored in the `local.lantern.mac` UserDefaults domain; changes to source video size or modification time invalidate the cached selection.
+
+The HTTP server reports playback activity from nonempty video file-body transfers (including byte ranges) and successful ContentDirectory Browse responses. HEAD, errors, subtitles, discovery, and routine status requests do not count. It holds activity across simultaneous requests and a 15-minute grace period after the last qualifying request closes; new activity restarts that grace period. Stop/failure cancels it immediately. The Mac adapter holds a sleep assertion only during this activity. This tracks delivery to the TV, not actual playback or buffered content, and does not override lid-close/manual sleep. A TV's automatic Browse requests can also extend the grace period.
 
 ## Network implementation and security
 

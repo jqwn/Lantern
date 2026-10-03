@@ -39,14 +39,19 @@ final class AppModel: ObservableObject {
         server = DLNAServer(uuid: uuid)
         interfaceID = interfaces.first?.id ?? ""
         server.onLog = { [weak self] message in DispatchQueue.main.async { self?.log(message) } }
+        server.onPlaybackActivity = { [weak self] active in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if active && self.activity == nil { self.activity = ProcessInfo.processInfo.beginActivity(options: [.idleSystemSleepDisabled, .userInitiatedAllowingIdleSystemSleep], reason: "TV browsing or streaming (15-minute idle grace period)") }
+                if !active, let activity = self.activity { ProcessInfo.processInfo.endActivity(activity); self.activity = nil }
+            }
+        }
         server.onState = { [weak self] running, message in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.sharing = running; self.starting = false
                 self.status = running ? "Visible to TVs on your network" : message
                 self.address = running ? message : ""
-                if running && self.activity == nil { self.activity = ProcessInfo.processInfo.beginActivity(options: [.idleSystemSleepDisabled, .userInitiatedAllowingIdleSystemSleep], reason: "Serving videos to your TV") }
-                if !running, let activity = self.activity { ProcessInfo.processInfo.endActivity(activity); self.activity = nil }
                 self.log(message)
             }
         }

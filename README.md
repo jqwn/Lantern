@@ -10,7 +10,7 @@ For a packaged build, open the DMG, drag **Lantern.app** to **Applications**, an
 2. Connect the Mac and TV to the same home network. Allow local-network access and incoming connections if macOS asks.
 3. Click **Start Sharing**.
 4. On the TV, open **Connected Devices / Sources → Lantern** and choose a video.
-5. Keep the Mac awake with its lid open. Use **Stop Sharing** or quit Lantern when finished.
+5. Lantern keeps the Mac awake while the TV browses or streams, and for 15 minutes afterward. Otherwise it can sleep normally; wake it before watching again. Use **Stop Sharing** or quit Lantern when finished.
 
 **Samsung tip:** if Lantern does not appear, leave sharing on and restart the TV. This was needed on the Samsung TV tested; other TVs may discover it immediately.
 

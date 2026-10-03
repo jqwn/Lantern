@@ -18,6 +18,7 @@ public final class DLNAServer {
     private let uuid: String
     public var onLog: ((String) -> Void)?
     public var onState: ((Bool, String) -> Void)?
+    public var onPlaybackActivity: ((Bool) -> Void)?
 
     public init(uuid: String) { self.uuid = uuid }
 
@@ -28,6 +29,7 @@ public final class DLNAServer {
             let http = HTTPServer(queue: self.queue)
             self.http = http
             http.handler = { [weak self] in self?.respond($0) ?? HTTPResponse(503) }
+            http.playbackActivity = { [weak self] in self?.onPlaybackActivity?($0) }
             http.state = { [weak self, weak http] result in
                 guard let self, let http, self.http === http else { return }
                 switch result {
@@ -186,7 +188,9 @@ public enum SOAP {
             default: return fault(401, "Invalid Action")
             }
         }
-        return HTTPResponse(text: envelope("<u:\(action)Response xmlns:u=\"urn:schemas-upnp-org:service:\(service):1\">\(body)</u:\(action)Response>"))
+        var response = HTTPResponse(text: envelope("<u:\(action)Response xmlns:u=\"urn:schemas-upnp-org:service:\(service):1\">\(body)</u:\(action)Response>"))
+        response.isLibraryBrowse = service == "ContentDirectory" && action == "Browse"
+        return response
     }
 
     static var protocols: String { ["video/mp4", "video/x-matroska", "video/quicktime", "video/mpeg", "video/mp2t", "video/x-msvideo"].map { "http-get:*:\($0):*" }.joined(separator: ",") }
