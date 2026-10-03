@@ -37,7 +37,13 @@ Whole-library preparation can take time. **Cancel After Current Video** stops th
 - PGS/VobSub image subtitles are not converted or OCR'd. This build does not burn subtitles into the video.
 - If the TV caches old subtitle information, reopen Lantern in the TV's source browser after preparing subtitles.
 
-Preparation extracts existing text only: it does not find new subtitles, translate them, or modify the original video.
+**Prepare English for Library** prefers full English text tracks over forced/foreign-dialogue-only tracks. SDH tracks are also usable. Track language and forced flags depend on the file's metadata; missing or inaccurate tags cannot always be resolved automatically. Existing external SRT language is checked locally; short or uncertain text is left for review rather than assumed English. **Use on TV** remains an explicit choice of any available text track.
+
+When no usable local English text subtitle is available, preparation searches OpenSubtitles using its file-hash fingerprint. It downloads only English, non-forced, non-machine/AI-translated results explicitly matched to that fingerprint, with one subtitle file and no conflicting movie/episode identities. It does not guess from filenames. Provider metadata can still be wrong, so a match is not a guarantee of perfect timing.
+
+**Activity** and the per-video status explain unresolved items. No match means nothing is downloaded. Quota/rate-limit or service failures stop further online attempts for that batch, while local extraction continues. Anonymous access permits 5 downloads per day per public IP; other apps sharing that IP may use the same allowance. After a reset, click **Prepare English for Library** again; already prepared files are reused. There is no background retry or automatic login. This build does not provide account sign-in for a higher quota.
+
+Official branch/tag builds include Lantern's developer API key. Pull-request and unconfigured source builds omit it; these can extract subtitles but report that online downloads are unavailable. No end-user API-key setup is required for official builds. Downloads are limited to 8 MB, must be valid UTF-8 SRT, and go into the cache rather than beside your originals.
 
 ## Unsupported video, missing sound, or stuttering
 
@@ -55,11 +61,15 @@ Wake the Mac before browsing or playing on the TV. You may need to reopen the TV
 
 Use **Refresh** after adding, deleting, or replacing videos. Do this before playback because refreshing an active library restarts sharing.
 
+Folders appear before videos in DLNA browsing. Folders use their own filesystem modification date, newest first, with filename order for ties. Videos use natural filename order, so E01, E02, and E10 stay in sequence regardless of their dates. A folder's date is not a recursive "newest video" date and can be preserved by copying tools; it is read again on refresh. A TV that applies its own sort may override the server order.
+
 ## What is shared and stored
 
 Only supported videos in the selected folder, matching subtitles, and explicitly prepared subtitle files are advertised. Hidden files, symlink entries, unrelated file types, and empty folders are excluded.
 
 Prepared subtitles are stored in `~/Library/Caches/Lantern/Subtitles`; originals are never altered. This cache is separate from your video folder. Changes to the source video's size or modification time invalidate its saved subtitle selection.
+
+Online preparation sends OpenSubtitles a file-size-based fingerprint calculated locally from the video's first and last 64 KB. It never uploads those bytes, the movie, or its filename/path. OpenSubtitles also sees the request's public IP and Lantern's application key. No online request is made just by browsing or sharing.
 
 There is no authentication or encryption. Anyone who can reach the server can browse the shared library while sharing is on. Use a trusted home network, not public Wi-Fi; do not port-forward Lantern or expose it to the internet.
 

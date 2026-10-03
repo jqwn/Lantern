@@ -18,6 +18,11 @@ FFmpeg and ffprobe are NOT bundled. Ordinary sharing and existing sidecar
 subtitles work without them; inspecting and preparing embedded text subtitles
 requires a separate FFmpeg installation.
 
+Prepare English for Library extracts full English subtitles first, then downloads
+confident file-hash matches from OpenSubtitles if needed. Searches send a video
+fingerprint, never the video or its filename. Anonymous downloads are limited
+to 5 per day per IP. Uncertain matches are left unresolved; originals are unchanged.
+
 Use only on a trusted home network. Sharing has no password or encryption.
 Lantern streams the original files unchanged; TV codec support still applies.
 

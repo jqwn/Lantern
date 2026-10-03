@@ -22,5 +22,16 @@ cp "$BIN_PATH/Lantern" "$APP/Contents/MacOS/Lantern"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
+python3 - "$APP/Contents/Info.plist" <<'PY'
+import os, plistlib, sys
+path = sys.argv[1]
+with open(path, 'rb') as source:
+    info = plistlib.load(source)
+key = os.environ.get('OPENSUBTITLES_API_KEY', '').strip()
+if key:
+    info['LanternOpenSubtitlesAPIKey'] = key
+with open(path, 'wb') as destination:
+    plistlib.dump(info, destination)
+PY
 codesign --force --sign - --identifier local.lantern.mac "$APP"
 printf '\nBuilt %s\n' "$APP"

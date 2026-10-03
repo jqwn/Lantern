@@ -53,6 +53,21 @@ final class CoreTests {
         #expect(try Library(root: directory).videos[0].subtitle == nil)
     }
 
+    @Test func foldersNewestFirstAndEpisodesByNaturalFilename() throws {
+        let old = try write("A old/E01.mkv").deletingLastPathComponent()
+        let new = try write("Z new/E10.mkv").deletingLastPathComponent()
+        let first = try write("Z new/E01.mkv")
+        _ = try write("Z new/E02.mkv")
+        _ = try write("Z new/E3.mkv")
+        _ = try write("Root film.mkv")
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 100)], ofItemAtPath: old.path)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 200)], ofItemAtPath: new.path)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1)], ofItemAtPath: first.path)
+        let library = try Library(root: directory)
+        #expect(library.children(of: "0").map(\.title) == ["Z new", "A old", "Root film"])
+        #expect(library.children(of: Library.id(for: new.resolvingSymlinksInPath())).map(\.title) == ["E01", "E02", "E3", "E10"])
+    }
+
     @Test func filenamesCannotInvalidateXML() throws {
         _ = try write("Broken\u{0001}Title.mp4")
         let library = try Library(root: directory)

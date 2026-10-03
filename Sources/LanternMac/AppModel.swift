@@ -21,6 +21,7 @@ final class AppModel: ObservableObject {
     @Published var error: String?
     @Published var showActivity = false
     @Published var preparation: Progress?
+    @Published var subtitleResults: [String: String] = [:]
     private var subtitles: [String: URL] = [:]
     private var activity: NSObjectProtocol?
     private let server: DLNAServer
@@ -84,8 +85,8 @@ final class AppModel: ObservableObject {
             let result = Result {
                 var library = try Library(root: root)
                 for item in library.videos {
-                    if let cached = subtitles[item.id], let stream = Int(cached.deletingPathExtension().lastPathComponent.split(separator: "-").last ?? ""),
-                       (try? MediaTools.cacheURL(item, stream: stream)) == cached, FileManager.default.fileExists(atPath: cached.path) {
+                    if let cached = subtitles[item.id],
+                       (try? MediaTools.cacheURL(item, stream: Int(cached.deletingPathExtension().lastPathComponent.split(separator: "-").last ?? ""))) == cached, FileManager.default.fileExists(atPath: cached.path) {
                         library.items[item.id]?.subtitle = cached
                     }
                 }
@@ -96,6 +97,7 @@ final class AppModel: ObservableObject {
                 switch result {
                 case .success(let library):
                     self.library = library; self.status = "\(library.videos.count) videos ready"
+                    self.subtitleResults = [:]
                     self.log("Scanned \(library.videos.count) videos; original files unchanged")
                     if resume { self.start() }
                 case .failure(let error): self.library = nil; self.error = error.localizedDescription; self.status = "Could not read folder"
@@ -132,7 +134,7 @@ final class AppModel: ObservableObject {
                 switch result {
                 case .success(let streams):
                     self.streams = streams
-                    self.subtitleIndex = streams.first(where: { $0.isTextSubtitle && ["eng", "en"].contains($0.tags?["language"] ?? "") })?.index ?? streams.first(where: \.isTextSubtitle)?.index ?? -1
+                    self.subtitleIndex = MediaTools.preferredEnglish(streams)?.index ?? streams.first(where: \.isTextSubtitle)?.index ?? -1
                     let audio = streams.filter { $0.codec_type == "audio" }.map { $0.codec_name ?? "unknown" }.joined(separator: ", ")
                     self.detailStatus = "Audio: \(audio.isEmpty ? "none" : audio) · \(streams.filter { $0.codec_type == "subtitle" }.count) subtitle tracks"
                     if streams.contains(where: { ["dts", "truehd"].contains($0.codec_name ?? "") }) { self.detailStatus += "\nDTS/TrueHD may need audio conversion before this TV can play it." }
@@ -156,6 +158,7 @@ final class AppModel: ObservableObject {
                     self.subtitles[item.id] = url; self.library?.items[item.id]?.subtitle = url
                     UserDefaults.standard.set(self.subtitles.mapValues(\.path), forKey: "subtitles")
                     self.status = "Subtitles ready"; self.log("Prepared subtitles for \(item.title)")
+                    self.subtitleResults[item.id] = "Selected subtitles ready"
                 case .failure(let error): self.error = error.localizedDescription; self.status = "Subtitle preparation failed"
                 }
                 if resume { self.start() }
@@ -171,27 +174,48 @@ final class AppModel: ObservableObject {
         let videos = library.videos
         let progress = Progress(totalUnitCount: Int64(videos.count))
         preparation = progress
+        subtitleResults = [:]
         worker.async {
+            let downloads = OpenSubtitles()
             var prepared: [String: URL] = [:]
             var failures: [String] = []
+            var ready = 0, extracted = 0, downloaded = 0, unresolved = 0
             for (index, item) in videos.enumerated() {
                 if progress.isCancelled { break }
                 DispatchQueue.main.async { self.status = "Preparing English subtitles \(index + 1)/\(videos.count)…" }
-                if item.subtitle != nil { continue }
+                var outcome: String
                 do {
                     let tracks = try MediaTools.inspect(item.url)
-                    if let track = tracks.first(where: { $0.isTextSubtitle && ["eng", "en"].contains($0.tags?["language"] ?? "") }) {
-                        prepared[item.id] = try MediaTools.extract(item, stream: track.index)
+                    switch try MediaTools.englishPlan(item, streams: tracks) {
+                    case .ready:
+                        ready += 1; outcome = "English subtitles ready"
+                    case .extract(let track):
+                        prepared[item.id] = try MediaTools.extract(item, stream: track)
+                        extracted += 1; outcome = "English subtitles extracted"
+                    case .download:
+                        prepared[item.id] = try downloads.download(item)
+                        downloaded += 1; outcome = "English subtitles downloaded"
+                    case .review(let reason):
+                        unresolved += 1; outcome = "Needs review"
+                        failures.append("\(item.title): \(reason)")
                     }
-                } catch { failures.append("\(item.title): \(error.localizedDescription)") }
+                } catch {
+                    unresolved += 1; outcome = "English subtitles unresolved"
+                    failures.append("\(item.title): \(error.localizedDescription)")
+                }
+                let result = outcome
+                DispatchQueue.main.async { self.subtitleResults[item.id] = result }
             }
             let results = prepared, errors = failures
+            let summary = "\(progress.isCancelled ? "Cancelled: " : "")\(ready) ready · \(extracted) extracted · \(downloaded) downloaded · \(unresolved) unresolved"
+            let quota = downloads.remaining
             DispatchQueue.main.async {
                 for (id, url) in results { self.subtitles[id] = url; self.library?.items[id]?.subtitle = url }
                 UserDefaults.standard.set(self.subtitles.mapValues(\.path), forKey: "subtitles")
                 self.busy = false; self.preparation = nil
-                self.status = "\(progress.isCancelled ? "Cancelled; prepared" : "Prepared") \(results.count) English subtitle files"
+                self.status = summary
                 self.log(self.status)
+                if let quota { self.log("OpenSubtitles reports \(quota) downloads remaining for this IP today") }
                 for error in errors { self.log(error) }
                 if !errors.isEmpty { self.error = "\(errors.count) videos could not be processed. See Activity for details." }
                 if resume { self.start() }

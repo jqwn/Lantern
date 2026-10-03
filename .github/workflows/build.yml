@@ -30,6 +30,7 @@ jobs:
         env:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
+          OPENSUBTITLES_API_KEY: ${{ github.event_name == 'push' && secrets.OPENSUBTITLES_API_KEY || '' }}
         run: |
           if [ "$REF_TYPE" = tag ]; then
             sh build-dmg.sh "${REF_NAME#v}"

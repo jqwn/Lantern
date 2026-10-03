@@ -79,6 +79,7 @@ struct MainView: View {
                                     Text(item.title).lineLimit(2)
                                     Text("\(item.url.pathExtension.uppercased()) · \(ByteCountFormatter.string(fromByteCount: Int64(item.size), countStyle: .file)) · \(item.url.deletingLastPathComponent().lastPathComponent)")
                                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                    if let result = model.subtitleResults[item.id] { Text(result).font(.caption).foregroundStyle(.secondary) }
                                 }
                                 Spacer()
                                 if item.subtitle != nil { Image(systemName: "captions.bubble.fill").foregroundStyle(.green).help("External subtitles ready") }
@@ -106,9 +107,9 @@ struct MainView: View {
                                 Button("Use on TV", action: model.prepareSelected).disabled(model.busy || model.starting || model.subtitleIndex < 0)
                             }
                         } else {
-                            Text("Embedded subtitles are kept in the original stream. Prepare English subtitles to also provide Samsung-compatible SRT sidecars.").font(.callout).foregroundStyle(.secondary)
+                            Text("Prepare English extracts full English text tracks first, then downloads confident OpenSubtitles matches for videos that need them.").font(.callout).foregroundStyle(.secondary)
                         }
-                        Text("Matching .srt files are shared automatically. Preparation uses a cache, never edits originals, and briefly restarts sharing. Burn-in is not available in this build; image subtitles and unsupported audio may need conversion.")
+                        Text("Online searches send a video fingerprint to OpenSubtitles, never the video or its filename. Anonymous downloads are limited to 5 per day per IP. Uncertain matches are left unresolved. Preparation caches SRT files, leaves originals unchanged, and restarts sharing.")
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(16)
                 }.frame(minWidth: 560)

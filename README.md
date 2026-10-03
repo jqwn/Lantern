@@ -1,6 +1,6 @@
 # Lantern
 
-A native Mac app that shares local videos with a DLNA/UPnP TV. No account, cloud service, uploads, or phone relay.
+A native Mac app that shares local videos with a DLNA/UPnP TV. No account required. Videos stay on your Mac—no uploads or phone relay.
 
 ## Quick start
 
@@ -14,14 +14,16 @@ For a packaged build, open the DMG, drag **Lantern.app** to **Applications**, an
 
 **Samsung tip:** if Lantern does not appear, leave sharing on and restart the TV. This was needed on the Samsung TV tested; other TVs may discover it immediately.
 
+DLNA browsing lists folders by modification date, newest first, then videos by natural filename order so episodes stay in sequence. Refresh after library changes.
+
 ## Optional subtitles
 
 If subtitles already work, no preparation is needed. Existing embedded subtitles and same-name `.srt` files are shared automatically.
 
-- **Prepare English for Library** extracts existing English text subtitles for the TV.
+- **Prepare English for Library** uses existing English subtitles, extracts full English text tracks, then automatically downloads confident English matches from OpenSubtitles when needed.
 - **Use on TV** prepares a selected subtitle track for one video.
 
-Preparation requires FFmpeg/ffprobe, which are not bundled. It does not download or translate subtitles, and never changes your originals.
+Preparation requires FFmpeg/ffprobe, which are not bundled. Downloads require a matching video fingerprint; uncertain matches are left unresolved. Anonymous downloads are limited to 5 per day per IP. Lantern never translates subtitles or changes your originals.
 
 **Prepare before watching:** preparation stops sharing until it finishes or is cancelled. Sharing then resumes if it was previously on.
 
@@ -36,6 +38,8 @@ See the [troubleshooting guide](TROUBLESHOOTING.md) for more detail.
 ## Privacy
 
 Use a **trusted home network**. Sharing has no password or encryption; anyone who can reach Lantern can browse the shared library while it is on. Do not expose it to the internet or forward router ports to it. Original files stay unchanged.
+
+English preparation contacts OpenSubtitles only when a download is needed, sending a video fingerprint—not the video, filename, or folder path. Normal sharing stays local.
 
 ---
 

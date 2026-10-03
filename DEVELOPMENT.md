@@ -19,6 +19,14 @@ To build an update without overwriting a running app, pass a separate output pat
 
 For subtitle inspection/extraction, the Mac adapter looks for FFmpeg and ffprobe in Homebrew's standard locations. The development machine's installed FFmpeg lacks libass/subtitles filtering; burn-in is not implemented in this build.
 
+`build-app.sh` optionally embeds `OPENSUBTITLES_API_KEY` from its environment into the output bundle's plist, before signing. No key is written to the source plist. For a local configured build, load the authorized Keychain item into that environment variable without printing it:
+
+```sh
+OPENSUBTITLES_API_KEY="$(security find-generic-password -a Lantern -s local.lantern.opensubtitles -w)" sh build-app.sh "$PWD/dist/next/Lantern.app"
+```
+
+The application key is intentionally extractable from a distributed desktop bundle; keeping it in Keychain/Actions secrets prevents source/history/log exposure, not extraction by recipients. Never print a configured bundle's full plist or commit a key.
+
 ## DMGs and GitHub Actions
 
 ```sh
@@ -28,6 +36,8 @@ sh build-dmg.sh 0.1.0
 This builds in a fresh `.build/dmg.*` staging directory without touching `dist/Lantern.app`, then creates `dist/Lantern-0.1.0-arm64.dmg` and its `.sha256` checksum on an Apple Silicon Mac. The disk image contains the app, an Applications shortcut, and first-launch instructions. FFmpeg/ffprobe are not bundled. Staging is retained for inspection; an existing DMG is not overwritten. The optional version defaults to `Resources/Info.plist` and is applied to the packaged app, not the source plist.
 
 The workflow uses the Apple Silicon `macos-15` runner with Xcode 16.4. Pushes to `main` and pull requests run unit tests, build the app/DMG, verify the ad-hoc signature and image, and upload artifacts for 14 days. LAN integration tests remain local; CI does not validate real TV discovery or playback.
+
+Only push builds receive the repository's `OPENSUBTITLES_API_KEY` Actions secret, scoped to the packaging step. Pull-request builds never receive it, including same-repository PRs. Tests use synthetic responses and no provider credentials or download quota.
 
 Pushing an exact `vMAJOR.MINOR.PATCH` tag (for example `v0.1.0`) additionally publishes a **prerelease** with the DMG and SHA-256 checksum. Tag versions must contain three numeric components. The release job alone receives repository write permission. No Apple signing credentials are configured: downloads are unnotarized and the release notes explain Gatekeeper approval. Publishing a tag is a separate, explicit release action; creating these files does not publish anything.
 
@@ -46,7 +56,7 @@ Coverage includes byte ranges, catalogue filtering, XML, SOAP pagination/faults,
 ## Architecture
 
 - `LanternCore`: Foundation, CryptoKit, Network.framework, and Darwin sockets. Implements the folder catalogue, SSDP discovery, HTTP streaming, SOAP ContentDirectory/ConnectionManager, GENA initial event subscriptions, and Samsung subtitle metadata. No AppKit, SwiftUI, or subprocess dependency.
-- `LanternMac`: SwiftUI window/menu bar, folder chooser, sleep assertion, and a Mac-only FFmpeg adapter.
+- `LanternMac`: SwiftUI window/menu bar, folder chooser, sleep assertion, a Mac-only FFmpeg adapter, local SRT language detection, and an OpenSubtitles client.
 - `lantern-serve`: command-line integration harness: `lantern-serve FOLDER [INTERFACE-IP] [PORT]`.
 
 HTTP byte ranges support seeking. Samsung `CaptionInfo.sec` headers and `sec:CaptionInfoEx` metadata expose external SRT files. Subtitle selections are stored in the `local.lantern.mac` UserDefaults domain; changes to source video size or modification time invalidate the cached selection.
@@ -58,6 +68,8 @@ The HTTP server reports playback activity from nonempty video file-body transfer
 The HTTP listener binds to one selected IPv4 LAN address on TCP port 8200. Discovery uses UDP multicast `239.255.255.250:1900`; SSDP replies are limited to peers on the interface's subnet. Event callbacks are limited to the requesting peer, with redirects disabled. Notification responses are closed after their headers; an overall five-second resource timeout bounds callbacks that do not finish their headers.
 
 Opaque IDs map to indexed files; request paths never become filesystem paths. The server rechecks file paths when serving media/subtitles to reject symlink substitutions, including links to unindexed files inside the selected folder. These protections do not replace network trust: the server intentionally has no authentication or TLS.
+
+The separate outbound subtitle client runs sequentially on the media worker. It requires explicit OpenSubtitles hash matches, rejects forced/translated/multi-file/conflicting-feature results, bounds responses to 8 MB, and uses ephemeral HTTPS sessions with request/resource timeouts. API requests cannot redirect; download redirects stay on HTTPS OpenSubtitles.com hosts and never carry the application key. Quota/rate-limit/service failures block further online attempts in that batch. Successful downloads use the same source-sensitive cache as extracted subtitles, with a `download` suffix. The custom LAN HTTP server is unchanged by this integration.
 
 ## Future iOS support
 

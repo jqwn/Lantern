@@ -9,6 +9,7 @@ public struct MediaItem: Identifiable, Hashable {
     public let isFolder: Bool
     public let size: UInt64
     public var subtitle: URL?
+    var modifiedAt: TimeInterval = 0
 
     public var mime: String {
         switch url.pathExtension.lowercased() {
@@ -32,7 +33,7 @@ public struct Library {
     public init(root: URL, subtitles: [String: URL] = [:]) throws {
         self.root = root.standardizedFileURL.resolvingSymlinksInPath()
         revision = UInt32(Date().timeIntervalSince1970.truncatingRemainder(dividingBy: Double(UInt32.max)))
-        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey]
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
         let rootValues = try self.root.resourceValues(forKeys: keys)
         guard rootValues.isDirectory == true else { throw CocoaError(.fileReadInvalidFileName) }
         items = ["0": MediaItem(id: "0", parentID: "-1", title: self.root.lastPathComponent, url: self.root, isFolder: true, size: 0)]
@@ -48,6 +49,7 @@ public struct Library {
             let sidecar = url.deletingPathExtension().appendingPathExtension("srt")
             let safeSidecar = sidecar.resolvingSymlinksInPath().path.hasPrefix(self.root.path + "/") && FileManager.default.fileExists(atPath: sidecar.path)
             items[id] = MediaItem(id: id, parentID: parent.path == self.root.path ? "0" : Self.id(for: parent), title: folder ? url.lastPathComponent : url.deletingPathExtension().lastPathComponent, url: url, isFolder: folder, size: UInt64(values.fileSize ?? 0), subtitle: subtitles[id] ?? (safeSidecar ? sidecar.resolvingSymlinksInPath() : nil))
+            if folder { items[id]?.modifiedAt = values.contentModificationDate?.timeIntervalSince1970 ?? 0 }
         }
         if let scanError { throw scanError }
         // Only advertise folders that contain playable media, including through descendants.
@@ -67,6 +69,7 @@ public struct Library {
     public func children(of id: String) -> [MediaItem] {
         items.values.filter { $0.parentID == id }.sorted {
             if $0.isFolder != $1.isFolder { return $0.isFolder }
+            if $0.isFolder && $0.modifiedAt != $1.modifiedAt { return $0.modifiedAt > $1.modifiedAt }
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
         }
     }
