@@ -60,6 +60,42 @@ final class SubtitleTests {
         #expect(throws: (any Error).self) { try MediaTools.parseSRT(Data(repeating: 0, count: SubtitleTransfer.limit + 1)) }
     }
 
+    @Test func rememberedEnglishSkipsInspectionAcrossRestartsAndInvalidatesChanges() throws {
+        var item = try video()
+        let sidecar = directory.appendingPathComponent("Example.S01E01.srt")
+        try Data(srt.utf8).write(to: sidecar)
+        item.subtitle = sidecar
+        #expect(try MediaTools.englishPlan(item, streams: []) == .ready)
+        let fingerprint = try #require(try MediaTools.englishFingerprint(item))
+        let suite = "Lantern.readiness-tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set([item.id: fingerprint], forKey: "englishReady")
+        let restored = try #require(UserDefaults(suiteName: suite)?.dictionary(forKey: "englishReady") as? [String: String])
+        func unexpectedInspection() throws -> [MediaStream] { throw MediaTools.failure("Inspection was invoked") }
+        #expect(try MediaTools.englishPlan(item, streams: unexpectedInspection(), readyFingerprint: restored[item.id]) == .ready)
+        #expect(throws: (any Error).self) { try MediaTools.englishPlan(item, streams: unexpectedInspection()) }
+
+        let videoDate = try #require(item.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+        try FileManager.default.setAttributes([.modificationDate: videoDate.addingTimeInterval(10)], ofItemAtPath: item.url.path)
+        #expect(throws: (any Error).self) { try MediaTools.englishPlan(item, streams: unexpectedInspection(), readyFingerprint: fingerprint) }
+        try Data(repeating: 0, count: 131_073).write(to: item.url)
+        try FileManager.default.setAttributes([.modificationDate: videoDate], ofItemAtPath: item.url.path)
+        #expect(throws: (any Error).self) { try MediaTools.englishPlan(item, streams: unexpectedInspection(), readyFingerprint: fingerprint) }
+
+        let resizedFingerprint = try #require(try MediaTools.englishFingerprint(item))
+        let subtitleDate = try #require(sidecar.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+        try FileManager.default.setAttributes([.modificationDate: subtitleDate.addingTimeInterval(10)], ofItemAtPath: sidecar.path)
+        #expect(throws: (any Error).self) { try MediaTools.englishPlan(item, streams: unexpectedInspection(), readyFingerprint: resizedFingerprint) }
+        try Data("1\n00:00:01,000 --> 00:00:02,000\nHi\n".utf8).write(to: sidecar)
+        try FileManager.default.setAttributes([.modificationDate: subtitleDate], ofItemAtPath: sidecar.path)
+        #expect(try MediaTools.englishPlan(item, streams: [], readyFingerprint: resizedFingerprint).isReview)
+        try FileManager.default.removeItem(at: sidecar)
+        #expect(try MediaTools.englishPlan(item, streams: [], readyFingerprint: resizedFingerprint) == .download)
+        item.subtitle = nil
+        #expect(throws: (any Error).self) { try MediaTools.englishPlan(item, streams: unexpectedInspection(), readyFingerprint: resizedFingerprint) }
+    }
+
     @Test func movieHashUsesBothEndsAndWrappingLittleEndianSum() throws {
         let item = try video()
         #expect(try OpenSubtitles.movieHash(item.url) == "0000000000020000")
@@ -100,7 +136,7 @@ final class SubtitleTests {
                 let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
                 #expect(body["sub_format"] as? String == "srt")
                 #expect(body["file_id"] as? Int == 1)
-                return (Data(#"{"link":"https://dl.opensubtitles.com/download/test.srt","remaining":0}"#.utf8), self.response(request))
+                return (Data(#"{"link":"https://dl.opensubtitles.com/download/test.srt","remaining":0,"reset_time_utc":"2100-01-01T00:00:00.000Z"}"#.utf8), self.response(request))
             default:
                 #expect(request.value(forHTTPHeaderField: "Api-Key") == nil)
                 return (Data(self.srt.utf8), self.response(request))
@@ -110,6 +146,7 @@ final class SubtitleTests {
         #expect(try String(contentsOf: destination, encoding: .utf8) == srt)
         #expect(try Data(contentsOf: item.url) == original)
         #expect(client.remaining == 0)
+        #expect(client.resetAt == Date(timeIntervalSince1970: 4_102_444_860))
         #expect(try client.download(item) == destination)
         #expect(calls == 3)
         var cached = item; cached.subtitle = destination
@@ -148,6 +185,53 @@ final class SubtitleTests {
         #expect(!SubtitleTransfer.allowedDownload(URL(string: "http://dl.opensubtitles.com/file")!))
         #expect(!SubtitleTransfer.allowedDownload(URL(string: "https://127.0.0.1/file")!))
         #expect(!SubtitleTransfer.allowedDownload(URL(string: "https://user@dl.opensubtitles.com/file")!))
+    }
+
+    @Test func quotaFailuresStayTypedAndRememberProviderReset() throws {
+        let item = try video()
+        let reset = Date(timeIntervalSince1970: 4_102_444_800)
+        let expected = reset.addingTimeInterval(60)
+        var calls = 0
+        let client = OpenSubtitles(apiKey: "synthetic-test-key") { request in
+            calls += 1
+            return (Data(#"{"remaining":0,"reset_time_utc":"2100-01-01T00:00:00.000Z"}"#.utf8), self.response(request, status: 406))
+        }
+        for _ in 0..<3 {
+            do { _ = try client.download(item); Issue.record("Quota should defer this download") }
+            catch OpenSubtitles.Failure.quota { }
+        }
+        #expect(calls == 1)
+        #expect(client.remaining == 0)
+        #expect(client.resetAt == expected)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        #expect(OpenSubtitles.quotaReset("2100-01-01T00:00:00Z", now: now) == expected)
+        for timestamp in [nil, "invalid", "2020-01-01T00:00:00.000Z"] {
+            #expect(OpenSubtitles.quotaReset(timestamp, now: now) == now.addingTimeInterval(86_400))
+        }
+    }
+
+    @Test func quotaQueueRestoresWaitsForResetAndRespectsPauseAndCurrentLibrary() throws {
+        let item = try video()
+        let suite = "Lantern.queue-tests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let reset = Date(timeIntervalSince1970: 1_700_000_000)
+        var queue = SubtitleQueue(defaults: defaults)
+        queue.pending = [item.id, "removed-video"]
+        queue.retryAt = reset
+        queue.save(defaults: defaults)
+        var restored = SubtitleQueue(defaults: try #require(UserDefaults(suiteName: suite)))
+        #expect(restored.pending == queue.pending)
+        #expect(restored.due(in: [item], now: reset.addingTimeInterval(-1)).isEmpty)
+        #expect(restored.due(in: [item], now: reset) == [item])
+        #expect(restored.due(in: [], now: reset).isEmpty)
+        restored.paused = true
+        restored.save(defaults: defaults)
+        #expect(SubtitleQueue(defaults: defaults).due(in: [item], now: reset).isEmpty)
+        restored.paused = false
+        restored.pending.remove(item.id)
+        restored.save(defaults: defaults)
+        #expect(SubtitleQueue(defaults: defaults).due(in: [item], now: reset).isEmpty)
     }
 
     @Test func unsafeDownloadsAndInvalidSRTNeverReachCache() throws {

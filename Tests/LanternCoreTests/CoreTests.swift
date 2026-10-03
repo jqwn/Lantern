@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Testing
 @testable import LanternCore
 
@@ -129,5 +130,80 @@ final class CoreTests {
         #expect(response.headers["Content-Range"] == "bytes 2-4/10")
         let invalid = HTTPRequest(method: "GET", path: "/media/sample.mp4", headers: ["range": "bytes=10-"], body: Data())
         #expect(HTTPResponse.stream(url: file, type: "video/mp4", request: invalid).status == 416)
+    }
+
+    @Test func liveSubtitlesDoNotInterruptStreaming() async throws {
+        let video = try write("Example.mp4", "")
+        let file = try FileHandle(forWritingTo: video)
+        let size = 16 * 1024 * 1024
+        try file.truncate(atOffset: UInt64(size)); try file.close()
+        let library = try Library(root: directory)
+        let item = try #require(library.videos.first)
+        let subtitle = try write("downloaded.srt", "1\n00:00:00,000 --> 00:00:01,000\nHello\n")
+        let server = DLNAServer(uuid: UUID().uuidString)
+        defer { server.shutdown() }
+        let base: String = try await withCheckedThrowingContinuation { continuation in
+            server.onState = { running, detail in
+                server.onState = nil
+                if running { continuation.resume(returning: detail) }
+                else { continuation.resume(throwing: NSError(domain: "LanternTests", code: 1, userInfo: [NSLocalizedDescriptionKey: detail])) }
+            }
+            server.start(library: library, interface: LANInterface(name: "lo0", address: "127.0.0.1", mask: inet_addr("255.0.0.0")), port: 0)
+        }
+        let port = UInt16(try #require(URLComponents(string: base)?.port))
+        let session = URLSession(configuration: .ephemeral)
+        defer { session.invalidateAndCancel() }
+        let mediaURL = URL(string: base + "/media/\(item.id).mp4")!
+        let subtitleURL = URL(string: base + "/subtitles/\(item.id).srt")!
+        var head = URLRequest(url: mediaURL); head.httpMethod = "HEAD"
+        let (_, before) = try await session.data(for: head)
+        #expect((before as? HTTPURLResponse)?.value(forHTTPHeaderField: "CaptionInfo.sec") == nil)
+
+        let socket = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        try #require(socket >= 0)
+        defer { Darwin.close(socket) }
+        var receiveBuffer: Int32 = 4096
+        try #require(setsockopt(socket, SOL_SOCKET, SO_RCVBUF, &receiveBuffer, socklen_t(MemoryLayout.size(ofValue: receiveBuffer))) == 0)
+        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+        try #require(setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout.size(ofValue: timeout))) == 0)
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size); address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian; address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let connected = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(socket, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        try #require(connected == 0)
+        let request = Data("GET \(mediaURL.path) HTTP/1.1\r\nHost: localhost\r\n\r\n".utf8)
+        try #require(request.withUnsafeBytes { Darwin.send(socket, $0.baseAddress, $0.count, 0) } == request.count)
+        var initial = [UInt8](repeating: 0, count: 16)
+        let initialCount = Darwin.recv(socket, &initial, initial.count, 0)
+        try #require(initialCount > 0)
+
+        server.updateSubtitles([item.id: subtitle], root: directory.appendingPathComponent("wrong-root"))
+        let (_, ignored) = try await session.data(from: subtitleURL)
+        #expect((ignored as? HTTPURLResponse)?.statusCode == 404)
+        server.updateSubtitles([item.id: subtitle], root: library.root)
+        let (srt, response) = try await session.data(from: subtitleURL)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        #expect(srt == (try Data(contentsOf: subtitle)))
+        let (_, after) = try await session.data(for: head)
+        #expect((after as? HTTPURLResponse)?.value(forHTTPHeaderField: "CaptionInfo.sec") == subtitleURL.absoluteString)
+        var browse = URLRequest(url: URL(string: base + "/control/content")!)
+        browse.httpMethod = "POST"
+        let soap = self.request("Browse", args: "<ObjectID>0</ObjectID><BrowseFlag>BrowseDirectChildren</BrowseFlag><StartingIndex>0</StartingIndex><RequestedCount>0</RequestedCount>")
+        browse.httpBody = soap.body; browse.allHTTPHeaderFields = soap.headers
+        let (catalogue, _) = try await session.data(for: browse)
+        #expect(String(decoding: catalogue, as: UTF8.self).contains("sec:CaptionInfoEx"))
+        #expect(String(decoding: catalogue, as: UTF8.self).contains("<UpdateID>\(library.revision &+ 1)</UpdateID>"))
+
+        var streamed = Data(initial.prefix(initialCount))
+        var buffer = [UInt8](repeating: 0, count: 65_536)
+        while true {
+            let count = Darwin.recv(socket, &buffer, buffer.count, 0)
+            try #require(count >= 0)
+            if count == 0 { break }
+            streamed.append(contentsOf: buffer.prefix(count))
+        }
+        let bodyStart = try #require(streamed.range(of: Data("\r\n\r\n".utf8))?.upperBound)
+        #expect(streamed.count - bodyStart == size)
+        #expect(streamed[bodyStart...].allSatisfy { $0 == 0 })
     }
 }

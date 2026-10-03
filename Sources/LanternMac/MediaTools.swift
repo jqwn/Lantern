@@ -69,9 +69,19 @@ enum MediaTools {
         return english.first(where: { !$0.isSDH }) ?? english.first
     }
 
-    static func englishPlan(_ item: MediaItem, streams: [MediaStream]) throws -> EnglishPlan {
+    static func englishFingerprint(_ item: MediaItem) throws -> String? {
+        guard var subtitle = item.subtitle else { return nil }
+        subtitle.removeAllCachedResourceValues()
+        let values = try subtitle.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        guard let modified = values.contentModificationDate, let size = values.fileSize else { return nil }
+        return try cacheURL(item, stream: nil).lastPathComponent + "|\(subtitle.path)|\(size)|\(String(modified.timeIntervalSince1970.bitPattern, radix: 16))"
+    }
+
+    static func englishPlan(_ item: MediaItem, streams inspect: @autoclosure () throws -> [MediaStream], readyFingerprint: String? = nil) throws -> EnglishPlan {
+        if let readyFingerprint, readyFingerprint == (try? englishFingerprint(item)) { return .ready }
+        let streams = try inspect()
         var unknownSidecar = false
-        if let subtitle = item.subtitle {
+        if let subtitle = item.subtitle, FileManager.default.fileExists(atPath: subtitle.path) {
             let data = try Data(contentsOf: subtitle, options: .mappedIfSafe)
             let parsed = try parseSRT(data)
             if subtitle == (try cacheURL(item, stream: nil)) { return .ready }

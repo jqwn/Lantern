@@ -94,7 +94,7 @@ struct MainView: View {
                             if let preparation = model.preparation {
                                 Button("Cancel After Current Video") { preparation.cancel() }
                             }
-                            Button("Prepare English for Library", action: model.prepareEnglish).disabled(model.busy || model.starting || model.library == nil)
+                            Button("Prepare English for Library") { model.prepareEnglish() }.disabled(model.busy || model.starting || model.library == nil)
                         }
                         if let item = model.selected {
                             Text(item.title).font(.subheadline).lineLimit(1)
@@ -109,7 +109,7 @@ struct MainView: View {
                         } else {
                             Text("Prepare English extracts full English text tracks first, then downloads confident OpenSubtitles matches for videos that need them.").font(.callout).foregroundStyle(.secondary)
                         }
-                        Text("Online searches send a video fingerprint to OpenSubtitles, never the video or its filename. Anonymous downloads are limited to 5 per day per IP. Uncertain matches are left unresolved. Preparation caches SRT files, leaves originals unchanged, and restarts sharing.")
+                        Text("Online searches send a video fingerprint to OpenSubtitles, never the video or its filename. Anonymous downloads are limited to 5 per day per IP; excess downloads queue and retry automatically after reset while Lantern is open. Unchanged ready videos are skipped. Manual preparation restarts sharing; automatic retries keep it running.")
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(16)
                 }.frame(minWidth: 560)

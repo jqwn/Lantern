@@ -25,7 +25,11 @@ If subtitles already work, no preparation is needed. Existing embedded subtitles
 
 Preparation requires FFmpeg/ffprobe, which are not bundled. Downloads require a matching video fingerprint; uncertain matches are left unresolved. Anonymous downloads are limited to 5 per day per IP. Lantern never translates subtitles or changes your originals.
 
-**Prepare before watching:** preparation stops sharing until it finishes or is cancelled. Sharing then resumes if it was previously on.
+Verified English subtitles are remembered across restarts. Later preparation skips unchanged, ready videos before inspecting their tracks; changed videos or changed/missing subtitles are checked again.
+
+Downloads over the daily limit are **queued**, not failed. Lantern remembers the queue and retries after the provider's reset time while the app is open and the Mac is awake, including after reopening it. If no usable reset time is provided, it waits 24 hours. Automatic retries keep sharing running and make new subtitles available to subsequent TV requests; you may need to reopen a video on the TV to see them. Cancelling preparation pauses automatic retries until you click **Prepare English for Library** again.
+
+**Prepare before watching:** manual preparation stops sharing until it finishes or is cancelled. Sharing then resumes if it was previously on.
 
 ## Having trouble?
 

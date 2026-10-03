@@ -26,7 +26,7 @@ public struct MediaItem: Identifiable, Hashable {
 public struct Library {
     public let root: URL
     public var items: [String: MediaItem]
-    public let revision: UInt32
+    public var revision: UInt32
     public var videos: [MediaItem] { items.values.filter { !$0.isFolder }.sorted { $0.url.path.localizedStandardCompare($1.url.path) == .orderedAscending } }
     public static let extensions: Set<String> = ["mkv", "mp4", "m4v", "mov", "avi", "ts", "mts", "m2ts", "mpg", "mpeg"]
 

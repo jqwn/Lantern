@@ -20,14 +20,15 @@ final class OpenSubtitles {
         struct Feature: Decodable { let feature_id: Int }
         struct File: Decodable { let file_id: Int }
     }
-    struct Ticket: Decodable { let link: URL; let remaining: Int }
+    struct Ticket: Decodable { let link: URL; let remaining: Int; let reset_time_utc: String? }
+    struct Quota: Decodable { let reset_time_utc: String? }
     enum Failure: Error, LocalizedError {
         case unavailable(String), noMatch, quota, rateLimit
         var errorDescription: String? {
             switch self {
             case .unavailable(let message): return message
             case .noMatch: return "No confident full English subtitle match; no download attempted."
-            case .quota: return "OpenSubtitles download quota exhausted. Try Prepare English again after the daily quota resets."
+            case .quota: return "OpenSubtitles download quota exhausted; queued for automatic retry after reset."
             case .rateLimit: return "OpenSubtitles is rate-limiting requests. Try Prepare English again later."
             }
         }
@@ -36,6 +37,7 @@ final class OpenSubtitles {
     let apiKey: String
     let transport: (URLRequest) throws -> (Data, HTTPURLResponse)
     private(set) var remaining: Int?
+    private(set) var resetAt: Date?
     private(set) var blocked: String?
     private var nextRequest = Date.distantPast
 
@@ -75,6 +77,17 @@ final class OpenSubtitles {
         }.first?.files[0].file_id
     }
 
+    static func quotaReset(_ timestamp: String?, now: Date = Date()) -> Date {
+        if let timestamp {
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            var date = formatter.date(from: timestamp)
+            if date == nil { formatter.formatOptions = [.withInternetDateTime]; date = formatter.date(from: timestamp) }
+            if let date, date > now { return date.addingTimeInterval(60) }
+        }
+        return now.addingTimeInterval(24 * 60 * 60)
+    }
+
     func request(_ request: URLRequest) throws -> Data {
         let delay = nextRequest.timeIntervalSinceNow
         if delay > 0 { Thread.sleep(forTimeInterval: delay) }
@@ -84,7 +97,10 @@ final class OpenSubtitles {
         catch { blocked = error.localizedDescription; throw error }
         switch response.statusCode {
         case 200..<300: return data
-        case 406: throw Failure.quota
+        case 406:
+            remaining = 0
+            resetAt = Self.quotaReset((try? JSONDecoder().decode(Quota.self, from: data))?.reset_time_utc)
+            throw Failure.quota
         case 429: throw Failure.rateLimit
         case 401, 403:
             blocked = "OpenSubtitles rejected this app's API key. Downloads are unavailable in this build."
@@ -101,12 +117,12 @@ final class OpenSubtitles {
             _ = try MediaTools.parseSRT(Data(contentsOf: destination, options: .mappedIfSafe))
             return destination
         }
+        if remaining == 0 { throw Failure.quota }
         if let blocked { throw Failure.unavailable(blocked) }
         guard !apiKey.isEmpty else {
             blocked = "This build has no OpenSubtitles API key. Local subtitle extraction still works."
             throw Failure.unavailable(blocked!)
         }
-        if remaining == 0 { blocked = Failure.quota.localizedDescription; throw Failure.quota }
         do {
             let hash = try Self.movieHash(item.url)
             var search = URLRequest(url: URL(string: "https://api.opensubtitles.com/api/v1/subtitles?foreign_parts_only=exclude&languages=en&moviehash=\(hash)&moviehash_match=only")!)
@@ -122,6 +138,7 @@ final class OpenSubtitles {
             ticketRequest.httpBody = try JSONSerialization.data(withJSONObject: ["file_id": file, "sub_format": "srt"])
             let ticket = try JSONDecoder().decode(Ticket.self, from: request(ticketRequest))
             remaining = max(0, ticket.remaining)
+            resetAt = Self.quotaReset(ticket.reset_time_utc)
             guard SubtitleTransfer.allowedDownload(ticket.link) else { throw Failure.unavailable("OpenSubtitles returned an unsupported download address.") }
             // Never forward the application API key to a subtitle-download host.
             let data = try request(URLRequest(url: ticket.link))

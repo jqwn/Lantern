@@ -52,6 +52,13 @@ public final class DLNAServer {
 
     public func stop() { queue.async { self.stopOnQueue(); self.onState?(false, "Sharing stopped") } }
     public func shutdown() { queue.sync { stopOnQueue() } }
+    public func updateSubtitles(_ subtitles: [String: URL], root: URL) {
+        queue.async {
+            guard self.library?.root == root, !subtitles.isEmpty else { return }
+            for (id, url) in subtitles { self.library?.items[id]?.subtitle = url }
+            self.library?.revision &+= 1
+        }
+    }
     private func stopOnQueue() {
         discovery?.stop(); discovery = nil; http?.stop(); http = nil
         subscriptions.removeAll()
