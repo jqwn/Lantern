@@ -30,6 +30,7 @@ final class AppModel: ObservableObject {
     private let server: DLNAServer
     private let worker = DispatchQueue(label: "Lantern.media", qos: .userInitiated)
     private var inspection = UUID()
+    private var restoreSharing = UserDefaults.standard.object(forKey: "sharingEnabled") as? Bool ?? true
 
     var videos: [MediaItem] { (library?.videos ?? []).filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) } }
     var selected: MediaItem? { selection.flatMap { library?.items[$0] } }
@@ -41,7 +42,7 @@ final class AppModel: ObservableObject {
         let uuid = UserDefaults.standard.string(forKey: "uuid") ?? UUID().uuidString.lowercased()
         UserDefaults.standard.set(uuid, forKey: "uuid")
         server = DLNAServer(uuid: uuid)
-        interfaceID = interfaces.first?.id ?? ""
+        interfaceID = UserDefaults.standard.string(forKey: "sharingInterface") ?? interfaces.first?.id ?? ""
         server.onLog = { [weak self] message in DispatchQueue.main.async { self?.log(message) } }
         server.onPlaybackActivity = { [weak self] active in
             DispatchQueue.main.async {
@@ -76,7 +77,8 @@ final class AppModel: ObservableObject {
         panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = false
         panel.message = "Only videos and subtitles in this folder will be shared with your local network."
         if panel.runModal() == .OK, let url = panel.url {
-            stop(); folder = url; subtitles = [:]; selection = nil
+            stop(remember: false); folder = url; subtitles = [:]; selection = nil
+            restoreSharing = UserDefaults.standard.object(forKey: "sharingEnabled") as? Bool ?? true
             subtitleQueue.pending = []; subtitleQueue.paused = false; subtitleQueue.save()
             UserDefaults.standard.set(url.path, forKey: "folder")
             refresh()
@@ -85,8 +87,9 @@ final class AppModel: ObservableObject {
 
     func refresh() {
         guard !busy else { return }
-        let resume = sharing
-        if sharing || starting { stop() }
+        let restoring = restoreSharing, resume = sharing || restoreSharing
+        restoreSharing = false
+        if sharing || starting { stop(remember: false) }
         busy = true; status = "Scanning videos…"
         let root = folder, subtitles = subtitles
         worker.async {
@@ -110,7 +113,7 @@ final class AppModel: ObservableObject {
                     self.subtitleQueue.save()
                     for id in self.subtitleQueue.pending { self.subtitleResults[id] = self.subtitleQueue.status }
                     self.log("Scanned \(library.videos.count) videos; original files unchanged")
-                    if resume { self.start() }
+                    if resume { self.start(restoring: restoring) }
                 case .failure(let error): self.library = nil; self.error = error.localizedDescription; self.status = "Could not read folder"
                 }
             }
@@ -122,15 +125,22 @@ final class AppModel: ObservableObject {
         if !interfaces.contains(where: { $0.id == interfaceID }) { interfaceID = interfaces.first?.id ?? "" }
     }
 
-    func start() {
+    func start(restoring: Bool = false) {
         guard !busy, !starting, !sharing, let library else { return }
-        refreshInterfaces()
-        guard let interface = interfaces.first(where: { $0.id == interfaceID }) else { error = "Connect your Mac to Wi-Fi or Ethernet first."; return }
+        if restoring { interfaces = LANInterface.available() }
+        else { refreshInterfaces() }
+        guard let interface = interfaces.first(where: { $0.id == interfaceID }) else { error = "The selected network is unavailable. Choose a connected Wi-Fi or Ethernet interface and click Start Sharing."; return }
+        UserDefaults.standard.set(true, forKey: "sharingEnabled")
+        UserDefaults.standard.set(interface.id, forKey: "sharingInterface")
         starting = true; status = "Starting sharing…"
         server.start(library: library, interface: interface)
     }
 
-    func stop() { server.stop(); sharing = false; starting = false }
+    func stop(remember: Bool = true) {
+        if remember { UserDefaults.standard.set(false, forKey: "sharingEnabled") }
+        restoreSharing = false
+        server.stop(); sharing = false; starting = false
+    }
     func shutdown() { subtitleRetryTimer?.invalidate(); server.shutdown() }
 
     func inspectSelection() {
@@ -158,7 +168,7 @@ final class AppModel: ObservableObject {
     func prepareSelected() {
         guard let item = selected, subtitleIndex >= 0, !busy else { return }
         let index = subtitleIndex, resume = sharing
-        if sharing { stop() }
+        if sharing { stop(remember: false) }
         busy = true; status = "Preparing subtitles…"
         worker.async {
             let result = Result { try MediaTools.extract(item, stream: index) }
@@ -183,7 +193,7 @@ final class AppModel: ObservableObject {
         let videos = queuedOnly ? subtitleQueue.due(in: library.videos) : library.videos
         guard !videos.isEmpty else { return }
         let resume = sharing && !queuedOnly
-        if resume { stop() }
+        if resume { stop(remember: false) }
         busy = true
         if !queuedOnly { subtitleQueue.paused = false }
         let englishReady = englishReady, subtitleQueue = subtitleQueue

@@ -8,11 +8,13 @@ For a packaged build, open the DMG, drag **Lantern.app** to **Applications**, an
 
 1. Open **Lantern.app** and choose your video folder. The default is `~/Downloads/Videos`.
 2. Connect the Mac and TV to the same home network. Allow local-network access and incoming connections if macOS asks.
-3. Click **Start Sharing**.
+3. Lantern starts sharing automatically on first launch once your folder and network are available. After that it remembers your last **Start Sharing / Stop Sharing** choice.
 4. On the TV, open **Connected Devices / Sources → Lantern** and choose a video.
 5. Lantern keeps the Mac awake while the TV browses or streams, and for 15 minutes afterward. Otherwise it can sleep normally; wake it before watching again. Use **Stop Sharing** or quit Lantern when finished.
 
 **Samsung tip:** if Lantern does not appear, leave sharing on and restart the TV. This was needed on the Samsung TV tested; other TVs may discover it immediately.
+
+Quitting Lantern preserves your sharing choice, as do temporary pauses for refresh or subtitle preparation. If the saved network interface/address is unavailable on launch, sharing stays off; choose a connected interface and click **Start Sharing**.
 
 DLNA browsing lists folders by modification date, newest first, then videos by natural filename order so episodes stay in sequence. Refresh after library changes.
 

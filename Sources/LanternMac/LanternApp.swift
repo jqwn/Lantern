@@ -19,7 +19,7 @@ struct LanternApp: App {
                 if let window = NSApp.windows.first(where: { $0.title == "Lantern" }) { window.makeKeyAndOrderFront(nil) }
                 else { openWindow(id: "main") }
             }
-            Button("Quit Lantern") { model.stop(); NSApp.terminate(nil) }
+            Button("Quit Lantern") { model.stop(remember: false); NSApp.terminate(nil) }
         }
     }
 }
