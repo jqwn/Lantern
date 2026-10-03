@@ -47,7 +47,7 @@ Lantern does not convert video or audio. The TV receives the original streams an
 
 ## Keeping the library available
 
-The menu-bar icon provides start/stop controls. Sharing does not start automatically or install a login/background service. Quit Lantern to stop it.
+Lantern starts as a menu-bar app. **Show Lantern** opens its window and shows it in the Dock and ⌘Tab. Closing the last Lantern window hides the Dock icon again but leaves sharing running. Its menu-bar icon also provides start/stop controls and **Quit Lantern**. Sharing does not start automatically or install a login/background service. Quit Lantern to stop it.
 
 Leaving sharing enabled does not prevent sleep. Lantern prevents idle system sleep while the TV browses the library or receives video, and for 15 minutes after that activity ends. Each successful library Browse request or video transfer restarts the grace period. Discovery, routine status/HEAD checks, and subtitle downloads do not count. A TV that automatically browses in the background can extend the grace period. Stopping sharing releases sleep prevention immediately.
 

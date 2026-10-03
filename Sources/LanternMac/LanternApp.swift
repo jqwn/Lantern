@@ -14,6 +14,7 @@ struct LanternApp: App {
             Button(model.sharing ? "Stop Sharing" : "Start Sharing") { model.sharing ? model.stop() : model.start() }.disabled(model.busy || model.starting)
             Divider()
             Button("Show Lantern") {
+                NSApp.setActivationPolicy(.regular)
                 NSApp.activate(ignoringOtherApps: true)
                 if let window = NSApp.windows.first(where: { $0.title == "Lantern" }) { window.makeKeyAndOrderFront(nil) }
                 else { openWindow(id: "main") }
@@ -122,6 +123,12 @@ struct MainView: View {
         }
         .alert("Lantern", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) { Button("OK") { model.error = nil } } message: { Text(model.error ?? "") }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.shutdown() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { notification in
+            if let window = notification.object as? NSWindow, window.title == "Lantern",
+               !NSApp.windows.contains(where: { $0 !== window && $0.title == "Lantern" && $0.isVisible }) {
+                NSApp.setActivationPolicy(.accessory)
+            }
+        }
         .sheet(isPresented: $model.showActivity) {
             VStack(alignment: .leading) {
                 HStack { Text("Activity").font(.title2.bold()); Spacer(); Button("Done") { model.showActivity = false } }

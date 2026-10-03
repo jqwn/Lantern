@@ -10,6 +10,7 @@
 <key>CFBundleShortVersionString</key><string>0.1.0</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
+<key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSLocalNetworkUsageDescription</key><string>Lantern shares your selected video folder with your TV on your home network.</string>
 <key>NSDownloadsFolderUsageDescription</key><string>Lantern reads videos and subtitles from your selected Downloads folder to share with your TV.</string>
