@@ -19,6 +19,18 @@ To build an update without overwriting a running app, pass a separate output pat
 
 For subtitle inspection/extraction, the Mac adapter looks for FFmpeg and ffprobe in Homebrew's standard locations. The development machine's installed FFmpeg lacks libass/subtitles filtering; burn-in is not implemented in this build.
 
+## DMGs and GitHub Actions
+
+```sh
+sh build-dmg.sh 0.1.0
+```
+
+This builds in a fresh `.build/dmg.*` staging directory without touching `dist/Lantern.app`, then creates `dist/Lantern-0.1.0-arm64.dmg` and its `.sha256` checksum on an Apple Silicon Mac. The disk image contains the app, an Applications shortcut, and first-launch instructions. FFmpeg/ffprobe are not bundled. Staging is retained for inspection; an existing DMG is not overwritten. The optional version defaults to `Resources/Info.plist` and is applied to the packaged app, not the source plist.
+
+The workflow uses the Apple Silicon `macos-15` runner with Xcode 16.4. Pushes to `main` and pull requests run unit tests, build the app/DMG, verify the ad-hoc signature and image, and upload artifacts for 14 days. LAN integration tests remain local; CI does not validate real TV discovery or playback.
+
+Pushing an exact `vMAJOR.MINOR.PATCH` tag (for example `v0.1.0`) additionally publishes a **prerelease** with the DMG and SHA-256 checksum. Tag versions must contain three numeric components. The release job alone receives repository write permission. No Apple signing credentials are configured: downloads are unnotarized and the release notes explain Gatekeeper approval. Publishing a tag is a separate, explicit release action; creating these files does not publish anything.
+
 ## Run tests
 
 ```sh
@@ -26,6 +38,8 @@ sh test.sh
 ```
 
 This runs Swift Testing unit tests and a real-network Python integration test using temporary synthetic files. Integration uses `en0` and requires its active IPv4 LAN address; it briefly advertises a test server and shuts it down afterward.
+
+Use `sh test.sh --unit-only` for the network-independent checks used in CI.
 
 Coverage includes byte ranges, catalogue filtering, XML, SOAP pagination/faults, actual file streaming, Samsung subtitle transport, event subscriptions, callback restrictions, and path/symlink isolation. The script supplies this Command Line Tools installation's Testing framework/plugin paths when necessary. Full Xcode installations use standard Swift Testing instead. Automated protocol checks do not establish compatibility with every TV or media format.
 

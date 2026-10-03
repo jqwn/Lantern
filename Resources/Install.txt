@@ -1,0 +1,24 @@
+Lantern — early preview for Apple Silicon Macs, macOS 13 or later
+
+Installation
+1. Drag Lantern.app to Applications. Quit an older copy first when playback can be interrupted.
+2. Eject the Lantern disk image, then open Lantern from Applications.
+3. Allow local-network access and incoming connections if macOS asks.
+
+Gatekeeper warning
+This app is ad-hoc signed, not Developer ID signed or notarized by Apple.
+macOS may block the first launch. Only if you trust this download, open
+System Settings > Privacy & Security after trying to launch, choose Open Anyway,
+and confirm. Managed Macs may not allow this exception. Do not disable Gatekeeper.
+An update may require approval again.
+
+Apple's guidance: https://support.apple.com/en-au/102445
+
+FFmpeg and ffprobe are NOT bundled. Ordinary sharing and existing sidecar
+subtitles work without them; inspecting and preparing embedded text subtitles
+requires a separate FFmpeg installation.
+
+Use only on a trusted home network. Sharing has no password or encryption.
+Lantern streams the original files unchanged; TV codec support still applies.
+
+Source and help: https://github.com/jqwn/Lantern
