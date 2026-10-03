@@ -14,8 +14,6 @@ For a packaged build, open the DMG, drag **Lantern.app** to **Applications**, an
 
 **Samsung tip:** if Lantern does not appear, leave sharing on and restart the TV. This was needed on the Samsung TV tested; other TVs may discover it immediately.
 
-Lantern runs in the **menu bar**. **Show Lantern** opens its window and adds it to the Dock and ⌘Tab; closing the last Lantern window hides the Dock icon again without stopping sharing. Choose **Quit Lantern** to exit.
-
 ## Optional subtitles
 
 If subtitles already work, no preparation is needed. Existing embedded subtitles and same-name `.srt` files are shared automatically.
