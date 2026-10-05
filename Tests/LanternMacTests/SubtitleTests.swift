@@ -96,6 +96,71 @@ final class SubtitleTests {
         #expect(throws: (any Error).self) { try MediaTools.englishPlan(item, streams: unexpectedInspection(), readyFingerprint: resizedFingerprint) }
     }
 
+    @Test func inspectionCacheSkipsProbeAndInvalidatesChangedVideos() throws {
+        let item = try video()
+        let cache = directory.appendingPathComponent("Inspection")
+        let data = Data(#"{"streams":[{"index":1,"codec_type":"subtitle","codec_name":"subrip","tags":{"language":"eng","title":"SDH"},"disposition":{"hearing_impaired":1}}]}"#.utf8)
+        var calls = 0
+        let probe: (String, [String]) throws -> Data = { name, arguments in
+            #expect(name == "ffprobe")
+            #expect(arguments.last == item.url.path)
+            calls += 1
+            return data
+        }
+        let first = try MediaTools.inspect(item.url, cacheDirectory: cache, run: probe)
+        #expect(first.first?.isSDH == true)
+        // A fresh invocation can use the disk cache even when ffprobe is unavailable.
+        let restored = try MediaTools.inspect(item.url, cacheDirectory: cache) { _, _ in throw MediaTools.failure("Unexpected probe") }
+        #expect(restored == first)
+        #expect(calls == 1)
+        let originalDate = try #require(item.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+        try FileManager.default.setAttributes([.modificationDate: originalDate.addingTimeInterval(10)], ofItemAtPath: item.url.path)
+        _ = try MediaTools.inspect(item.url, cacheDirectory: cache, run: probe)
+        #expect(calls == 2)
+        try Data(repeating: 0, count: 131_073).write(to: item.url)
+        try FileManager.default.setAttributes([.modificationDate: originalDate], ofItemAtPath: item.url.path)
+        _ = try MediaTools.inspect(item.url, cacheDirectory: cache, run: probe)
+        #expect(calls == 3)
+        try FileManager.default.removeItem(at: item.url)
+        #expect(throws: (any Error).self) { try MediaTools.inspect(item.url, cacheDirectory: cache, run: probe) }
+        #expect(calls == 3)
+    }
+
+    @Test func inspectionCacheRecoversWithoutCachingFailuresOrChangingDownloadPlans() throws {
+        let item = try video()
+        let cache = directory.appendingPathComponent("Inspection")
+        let data = Data(#"{"streams":[]}"#.utf8)
+        var calls = 0
+        let probe: (String, [String]) throws -> Data = { _, _ in calls += 1; return data }
+        #expect(throws: (any Error).self) {
+            try MediaTools.inspect(item.url, cacheDirectory: cache) { _, _ in throw MediaTools.failure("Probe failed") }
+        }
+        #expect(throws: (any Error).self) {
+            try MediaTools.inspect(item.url, cacheDirectory: cache) { _, _ in Data("invalid JSON".utf8) }
+        }
+        let first = try MediaTools.englishPlan(item, streams: MediaTools.inspect(item.url, cacheDirectory: cache, run: probe))
+        let second = try MediaTools.englishPlan(item, streams: MediaTools.inspect(item.url, cacheDirectory: cache, run: probe))
+        #expect(first == .download && second == .download)
+        #expect(calls == 1)
+        let saved = try #require(FileManager.default.contentsOfDirectory(at: cache, includingPropertiesForKeys: nil).first)
+        try Data("corrupt cache".utf8).write(to: saved)
+        _ = try MediaTools.inspect(item.url, cacheDirectory: cache, run: probe)
+        #expect(calls == 2)
+        try FileManager.default.removeItem(at: saved)
+        #expect(throws: (any Error).self) {
+            try MediaTools.inspect(item.url, cacheDirectory: cache) { _, _ in
+                try Data("changed during probe".utf8).write(to: item.url)
+                return data
+            }
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: cache.path).isEmpty)
+        _ = try MediaTools.inspect(item.url, cacheDirectory: cache, run: probe)
+        #expect(calls == 3)
+        let unavailable = directory.appendingPathComponent("Not a directory")
+        try Data().write(to: unavailable)
+        #expect(try MediaTools.inspect(item.url, cacheDirectory: unavailable, run: probe).isEmpty)
+    }
+
     @Test func movieHashUsesBothEndsAndWrappingLittleEndianSum() throws {
         let item = try video()
         #expect(try OpenSubtitles.movieHash(item.url) == "0000000000020000")

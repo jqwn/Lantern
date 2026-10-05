@@ -49,9 +49,23 @@ enum MediaTools {
         return data
     }
 
-    static func inspect(_ url: URL) throws -> [MediaStream] {
+    static func inspect(_ url: URL, cacheDirectory: URL? = nil, run: (String, [String]) throws -> Data = MediaTools.run) throws -> [MediaStream] {
+        var source = url
+        source.removeAllCachedResourceValues()
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .fileSizeKey]
+        let before = try source.resourceValues(forKeys: keys)
+        let cache = try cacheDirectory ?? FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Lantern/Inspection-v1", isDirectory: true)
+        let modified = before.contentModificationDate?.timeIntervalSince1970 ?? 0
+        let destination = cache.appendingPathComponent("\(Library.id(for: url))-\(before.fileSize ?? 0)-\(String(modified.bitPattern, radix: 16)).json")
+        if let data = try? Data(contentsOf: destination), let probe = try? JSONDecoder().decode(Probe.self, from: data) { return probe.streams }
         let data = try run("ffprobe", ["-v", "error", "-show_entries", "stream=index,codec_type,codec_name:stream_tags=language,title:stream_disposition=forced,hearing_impaired", "-of", "json", url.path])
-        return try JSONDecoder().decode(Probe.self, from: data).streams
+        let streams = try JSONDecoder().decode(Probe.self, from: data).streams
+        source.removeAllCachedResourceValues()
+        let after = try source.resourceValues(forKeys: keys)
+        guard before.fileSize == after.fileSize, before.contentModificationDate == after.contentModificationDate else { throw failure("Video changed while inspecting its tracks. Try again after the file finishes changing.") }
+        try? FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+        try? data.write(to: destination, options: .atomic)
+        return streams
     }
 
     static func cacheURL(_ item: MediaItem, stream: Int?) throws -> URL {
