@@ -50,7 +50,7 @@ struct MainView: View {
                     Text(model.folder.path).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                     HStack {
                         Button("Choose Folder…", action: model.chooseFolder)
-                        Button(action: model.refresh) { Image(systemName: "arrow.clockwise") }.help("Refresh library")
+                        Button(action: { model.refresh() }) { Image(systemName: "arrow.clockwise") }.help("Refresh library")
                     }.disabled(model.busy || model.starting)
                     Divider()
                     Text("LOCAL NETWORK").font(.caption.weight(.semibold)).foregroundStyle(.secondary)

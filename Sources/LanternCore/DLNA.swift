@@ -52,6 +52,14 @@ public final class DLNAServer {
 
     public func stop() { queue.async { self.stopOnQueue(); self.onState?(false, "Sharing stopped") } }
     public func shutdown() { queue.sync { stopOnQueue() } }
+    public func updateLibrary(_ library: Library) {
+        queue.async {
+            guard let current = self.library, current.root == library.root else { return }
+            var updated = library
+            updated.revision = current.revision &+ 1
+            self.library = updated
+        }
+    }
     public func updateSubtitles(_ subtitles: [String: URL], root: URL) {
         queue.async {
             guard self.library?.root == root, !subtitles.isEmpty else { return }
@@ -84,6 +92,8 @@ public final class DLNAServer {
         }
         let parts = request.path.split(separator: "/")
         guard parts.count == 2, let id = parts.last?.split(separator: ".").first, let item = library.items[String(id)], !item.isFolder else { return HTTPResponse(404) }
+        var completion = CompletionMarkers()
+        guard completion.allows(item.url) else { return HTTPResponse(404) }
         if parts[0] == "subtitles", let subtitle = item.subtitle {
             guard subtitle.resolvingSymlinksInPath() == subtitle.standardizedFileURL else { return HTTPResponse(404) }
             onLog?("Serving subtitles: \(item.title)")

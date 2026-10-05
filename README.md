@@ -14,8 +14,6 @@ For a packaged build, open the DMG, drag **Lantern.app** to **Applications**, an
 
 **Samsung tip:** if Lantern does not appear, leave sharing on and restart the TV. This was needed on the Samsung TV tested; other TVs may discover it immediately.
 
-DLNA browsing lists folders by modification date, newest first, then videos by natural filename order so episodes stay in sequence. Refresh after library changes.
-
 ## Optional subtitles
 
 If subtitles already work, no preparation is needed. Existing embedded subtitles and same-name `.srt` files are shared automatically.

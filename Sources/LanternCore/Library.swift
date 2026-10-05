@@ -38,18 +38,20 @@ public struct Library {
         guard rootValues.isDirectory == true else { throw CocoaError(.fileReadInvalidFileName) }
         items = ["0": MediaItem(id: "0", parentID: "-1", title: self.root.lastPathComponent, url: self.root, isFolder: true, size: 0)]
         var scanError: Error?
+        var completion = CompletionMarkers()
         guard let enumerator = FileManager.default.enumerator(at: self.root, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles, .skipsPackageDescendants], errorHandler: { _, error in scanError = error; return false }) else { throw CocoaError(.fileReadNoPermission) }
         for case let url as URL in enumerator {
             let values = try url.resourceValues(forKeys: keys)
             if values.isSymbolicLink == true { continue }
             let folder = values.isDirectory == true
             guard folder || (values.isRegularFile == true && Self.extensions.contains(url.pathExtension.lowercased())) else { continue }
+            guard folder || completion.allows(url) else { continue }
             let id = Self.id(for: url)
             let parent = url.deletingLastPathComponent().standardizedFileURL
             let sidecar = url.deletingPathExtension().appendingPathExtension("srt")
             let safeSidecar = sidecar.resolvingSymlinksInPath().path.hasPrefix(self.root.path + "/") && FileManager.default.fileExists(atPath: sidecar.path)
             items[id] = MediaItem(id: id, parentID: parent.path == self.root.path ? "0" : Self.id(for: parent), title: folder ? url.lastPathComponent : url.deletingPathExtension().lastPathComponent, url: url, isFolder: folder, size: UInt64(values.fileSize ?? 0), subtitle: subtitles[id] ?? (safeSidecar ? sidecar.resolvingSymlinksInPath() : nil))
-            if folder { items[id]?.modifiedAt = values.contentModificationDate?.timeIntervalSince1970 ?? 0 }
+            items[id]?.modifiedAt = values.contentModificationDate?.timeIntervalSince1970 ?? 0
         }
         if let scanError { throw scanError }
         // Only advertise folders that contain playable media, including through descendants.
@@ -67,9 +69,10 @@ public struct Library {
     }
 
     public func children(of id: String) -> [MediaItem] {
-        items.values.filter { $0.parentID == id }.sorted {
-            if $0.isFolder != $1.isFolder { return $0.isFolder }
-            if $0.isFolder && $0.modifiedAt != $1.modifiedAt { return $0.modifiedAt > $1.modifiedAt }
+        let entries = items.values.filter { $0.parentID == id }
+        let byDate = entries.contains(where: \.isFolder)
+        return entries.sorted {
+            if byDate && $0.modifiedAt != $1.modifiedAt { return $0.modifiedAt > $1.modifiedAt }
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
         }
     }

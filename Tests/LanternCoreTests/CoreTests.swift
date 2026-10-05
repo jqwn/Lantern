@@ -54,18 +54,23 @@ final class CoreTests {
         #expect(try Library(root: directory).videos[0].subtitle == nil)
     }
 
-    @Test func foldersNewestFirstAndEpisodesByNaturalFilename() throws {
+    @Test func mixedFoldersAndVideosByDateButEpisodesByNaturalFilename() throws {
         let old = try write("A old/E01.mkv").deletingLastPathComponent()
         let new = try write("Z new/E10.mkv").deletingLastPathComponent()
         let first = try write("Z new/E01.mkv")
         _ = try write("Z new/E02.mkv")
         _ = try write("Z new/E3.mkv")
-        _ = try write("Root film.mkv")
+        let film = try write("Root film.mkv")
+        let newest = try write("Newest film.mkv")
+        let sameDate = try write("B same date.mkv")
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 100)], ofItemAtPath: old.path)
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 200)], ofItemAtPath: new.path)
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1)], ofItemAtPath: first.path)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 150)], ofItemAtPath: film.path)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 300)], ofItemAtPath: newest.path)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 200)], ofItemAtPath: sameDate.path)
         let library = try Library(root: directory)
-        #expect(library.children(of: "0").map(\.title) == ["Z new", "A old", "Root film"])
+        #expect(library.children(of: "0").map(\.title) == ["Newest film", "B same date", "Z new", "Root film", "A old"])
         #expect(library.children(of: Library.id(for: new.resolvingSymlinksInPath())).map(\.title) == ["E01", "E02", "E3", "E10"])
     }
 
@@ -132,7 +137,7 @@ final class CoreTests {
         #expect(HTTPResponse.stream(url: file, type: "video/mp4", request: invalid).status == 416)
     }
 
-    @Test func liveSubtitlesDoNotInterruptStreaming() async throws {
+    @Test func liveCatalogueAndSubtitlesDoNotInterruptStreaming() async throws {
         let video = try write("Example.mp4", "")
         let file = try FileHandle(forWritingTo: video)
         let size = 16 * 1024 * 1024
@@ -193,6 +198,22 @@ final class CoreTests {
         let (catalogue, _) = try await session.data(for: browse)
         #expect(String(decoding: catalogue, as: UTF8.self).contains("sec:CaptionInfoEx"))
         #expect(String(decoding: catalogue, as: UTF8.self).contains("<UpdateID>\(library.revision &+ 1)</UpdateID>"))
+
+        let added = try write("New season/Fresh.mp4", "new video")
+        try FileManager.default.removeItem(at: video)
+        server.updateLibrary(try Library(root: directory))
+        let (_, removed) = try await session.data(for: head)
+        #expect((removed as? HTTPURLResponse)?.statusCode == 404)
+        let addedURL = URL(string: base + "/media/\(Library.id(for: added.resolvingSymlinksInPath())).mp4")!
+        let (addedData, addedResponse) = try await session.data(from: addedURL)
+        #expect((addedResponse as? HTTPURLResponse)?.statusCode == 200)
+        #expect(addedData == Data("new video".utf8))
+        let (updatedCatalogue, _) = try await session.data(for: browse)
+        #expect(String(decoding: updatedCatalogue, as: UTF8.self).contains("New season"))
+        #expect(String(decoding: updatedCatalogue, as: UTF8.self).contains("<UpdateID>\(library.revision &+ 2)</UpdateID>"))
+        server.updateLibrary(try Library(root: added.deletingLastPathComponent()))
+        let (unchangedCatalogue, _) = try await session.data(for: browse)
+        #expect(unchangedCatalogue == updatedCatalogue)
 
         var streamed = Data(initial.prefix(initialCount))
         var buffer = [UInt8](repeating: 0, count: 65_536)

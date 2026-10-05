@@ -31,6 +31,10 @@ final class AppModel: ObservableObject {
     private let worker = DispatchQueue(label: "Lantern.media", qos: .userInitiated)
     private var inspection = UUID()
     private var restoreSharing = UserDefaults.standard.object(forKey: "sharingEnabled") as? Bool ?? true
+    private var folderWatcher: FolderWatcher?
+    private var watchedFolder: URL?
+    private var libraryRefreshTimer: Timer?
+    private var shuttingDown = false
 
     var videos: [MediaItem] { (library?.videos ?? []).filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) } }
     var selected: MediaItem? { selection.flatMap { library?.items[$0] } }
@@ -85,12 +89,33 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func refresh() {
-        guard !busy else { return }
+    func scheduleLibraryRefresh() {
+        guard !shuttingDown, libraryRefreshTimer == nil else { return }
+        libraryRefreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.libraryRefreshTimer = nil
+            self.refresh(automatic: true)
+        }
+    }
+
+    func refresh(automatic: Bool = false) {
+        guard !shuttingDown else { return }
+        guard !busy, !automatic || !starting else {
+            if automatic { scheduleLibraryRefresh() }
+            return
+        }
+        if watchedFolder != folder {
+            folderWatcher?.stop(); folderWatcher = nil; watchedFolder = nil
+            do {
+                folderWatcher = try FolderWatcher(paths: [folder]) { [weak self] in self?.scheduleLibraryRefresh() }
+                watchedFolder = folder
+            } catch { log(error.localizedDescription) }
+        }
         let restoring = restoreSharing, resume = sharing || restoreSharing
         restoreSharing = false
-        if sharing || starting { stop(remember: false) }
-        busy = true; status = "Scanning videos…"
+        if !automatic && (sharing || starting) { stop(remember: false) }
+        busy = true
+        if !automatic { status = "Scanning videos…" }
         let root = folder, subtitles = subtitles
         worker.async {
             let result = Result {
@@ -104,17 +129,23 @@ final class AppModel: ObservableObject {
                 return library
             }
             DispatchQueue.main.async {
+                guard !self.shuttingDown else { return }
                 self.busy = false
                 switch result {
                 case .success(let library):
-                    self.library = library; self.status = "\(library.videos.count) videos ready"
-                    self.subtitleResults = [:]
-                    self.subtitleQueue.pending.formIntersection(library.videos.map(\.id))
+                    if automatic && self.library?.items == library.items { return }
+                    self.library = library
+                    if !automatic { self.status = "\(library.videos.count) videos ready" }
+                    self.subtitleResults = automatic ? self.subtitleResults.filter { library.items[$0.key] != nil } : [:]
+                    if !automatic { self.subtitleQueue.pending.formIntersection(library.videos.map(\.id)) }
                     self.subtitleQueue.save()
                     for id in self.subtitleQueue.pending { self.subtitleResults[id] = self.subtitleQueue.status }
-                    self.log("Scanned \(library.videos.count) videos; original files unchanged")
-                    if resume { self.start(restoring: restoring) }
-                case .failure(let error): self.library = nil; self.error = error.localizedDescription; self.status = "Could not read folder"
+                    self.log("\(automatic ? "Updated library:" : "Scanned") \(library.videos.count) videos; original files unchanged")
+                    if automatic { self.server.updateLibrary(library) }
+                    else if resume { self.start(restoring: restoring) }
+                case .failure(let error):
+                    if automatic { self.log("Could not update the library: \(error.localizedDescription)") }
+                    else { self.library = nil; self.error = error.localizedDescription; self.status = "Could not read folder" }
                 }
             }
         }
@@ -141,7 +172,11 @@ final class AppModel: ObservableObject {
         restoreSharing = false
         server.stop(); sharing = false; starting = false
     }
-    func shutdown() { subtitleRetryTimer?.invalidate(); server.shutdown() }
+    func shutdown() {
+        shuttingDown = true
+        folderWatcher?.stop(); libraryRefreshTimer?.invalidate(); subtitleRetryTimer?.invalidate()
+        server.shutdown()
+    }
 
     func inspectSelection() {
         let token = UUID(); inspection = token
