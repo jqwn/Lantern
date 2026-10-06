@@ -181,6 +181,70 @@ final class SubtitleTests {
         #expect(OpenSubtitles.confidentFile(exact.data) == 2)
     }
 
+    @Test func manualSearchUsesCleanEditableMetadataAndOnlyOffersFullEnglishFiles() throws {
+        let query = OpenSubtitles.Query(filename: "Example.Show.S02E03.1080p.WEBRip.x265-GROUP[tracker.invalid]")
+        #expect(query.title == "Example Show" && query.season == "2" && query.episode == "3")
+        #expect(OpenSubtitles.Query(filename: "Example.Movie.2020.1080p.BluRay").title == "Example Movie")
+        #expect(OpenSubtitles.Query(filename: "2020.Example.1080p.WEBRip").title == "2020 Example")
+        #expect(OpenSubtitles.Query(filename: "Example.S٢E٣").season.isEmpty)
+        var attributes = entry(file: 42, hash: false)["attributes"] as! [String: Any]
+        attributes["release"] = "Example.Show.S02E03.WEB"
+        attributes["hearing_impaired"] = true
+        attributes["feature_details"] = ["feature_id": 100, "movie_name": "Example Show — A New Day", "season_number": 2, "episode_number": 3]
+        let candidate = ["attributes": attributes]
+        var calls = 0
+        let client = OpenSubtitles(apiKey: "synthetic-test-key") { request in
+            calls += 1
+            #expect(request.httpMethod == "GET")
+            let parameters = Dictionary(uniqueKeysWithValues: URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!.map { ($0.name, $0.value!) })
+            #expect(parameters["query"] == "Example Show")
+            #expect(parameters["season_number"] == "2" && parameters["episode_number"] == "3")
+            #expect(parameters["moviehash"] == nil && parameters["moviehash_match"] == nil)
+            #expect(!request.url!.absoluteString.contains("GROUP") && !request.url!.absoluteString.contains("tracker"))
+            return (try self.search([candidate, candidate, self.entry(language: "fr"), self.entry(forced: true), self.entry(ai: true), self.entry(files: 2)]), self.response(request))
+        }
+        let candidates = try client.searchCandidates(query)
+        #expect(candidates.count == 1 && candidates[0].id == 42)
+        #expect(candidates[0].release == "Example.Show.S02E03.WEB")
+        #expect(candidates[0].detail.contains("S2 E3") && candidates[0].detail.contains("SDH"))
+        var invalid = query; invalid.episode = "-1"
+        #expect(throws: OpenSubtitles.Failure.self) { try client.searchCandidates(invalid) }
+        invalid = query; invalid.title = " "
+        #expect(throws: OpenSubtitles.Failure.self) { try client.searchCandidates(invalid) }
+        #expect(calls == 1)
+    }
+
+    @Test func selectedDownloadUsesChosenFileWithoutHashSearchOrCachedSubstitution() throws {
+        let item = try video()
+        let destination = try MediaTools.cacheURL(item, stream: nil)
+        defer { try? FileManager.default.removeItem(at: destination) }
+        try Data("old cached choice".utf8).write(to: destination)
+        var calls = 0
+        let client = OpenSubtitles(apiKey: "synthetic-test-key") { request in
+            calls += 1
+            if calls == 1 {
+                #expect(request.url?.path == "/api/v1/download" && request.httpMethod == "POST")
+                let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+                #expect(body["file_id"] as? Int == 42)
+                return (Data(#"{"link":"https://dl.opensubtitles.com/selected.srt","remaining":4}"#.utf8), self.response(request))
+            }
+            #expect(request.value(forHTTPHeaderField: "Api-Key") == nil)
+            return (Data(self.srt.utf8), self.response(request))
+        }
+        #expect(try client.download(item, fileID: 42) == destination)
+        #expect(calls == 2)
+        #expect(try String(contentsOf: destination, encoding: .utf8) == srt)
+        let stale = OpenSubtitles(apiKey: "synthetic-test-key") { request in
+            if request.url?.path == "/api/v1/download" {
+                return (Data(#"{"link":"https://dl.opensubtitles.com/selected.srt","remaining":3}"#.utf8), self.response(request))
+            }
+            try Data(repeating: 0, count: 131_073).write(to: item.url)
+            return (Data(self.srt.utf8), self.response(request))
+        }
+        #expect(throws: OpenSubtitles.Failure.self) { try stale.download(item, fileID: 43) }
+        #expect(!FileManager.default.fileExists(atPath: try MediaTools.cacheURL(item, stream: nil).path))
+    }
+
     @Test func downloadFlowKeepsOriginalsAndCredentialsPrivate() throws {
         let item = try video()
         let original = try Data(contentsOf: item.url)

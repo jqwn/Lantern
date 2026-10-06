@@ -3,6 +3,11 @@ import SwiftUI
 import LanternCore
 
 final class AppModel: ObservableObject {
+    struct SubtitlePicker: Identifiable {
+        let id = UUID()
+        let item: MediaItem
+        let source: URL
+    }
     @Published var folder: URL
     @Published var library: Library?
     @Published var interfaces = LANInterface.available()
@@ -22,6 +27,11 @@ final class AppModel: ObservableObject {
     @Published var showActivity = false
     @Published var preparation: Progress?
     @Published var subtitleResults: [String: String] = [:]
+    @Published var subtitlePicker: SubtitlePicker?
+    @Published var subtitleQuery = OpenSubtitles.Query(filename: "")
+    @Published var subtitleCandidates: [OpenSubtitles.Candidate] = []
+    @Published var subtitleCandidateID: Int?
+    @Published var subtitleSearchStatus = ""
     private var subtitles: [String: URL] = [:]
     private var englishReady = UserDefaults.standard.dictionary(forKey: "englishReady") as? [String: String] ?? [:]
     private var selectedSubtitleReady = UserDefaults.standard.dictionary(forKey: "selectedSubtitleReady") as? [String: String] ?? [:]
@@ -279,15 +289,17 @@ final class AppModel: ObservableObject {
             var readiness = englishReady
             var queue = subtitleQueue
             var failures: [String] = []
+            var picker: SubtitlePicker?
             var ready = 0, extracted = 0, downloaded = 0, unresolved = 0
             for (index, item) in videos.enumerated() {
                 if progress.isCancelled { break }
                 DispatchQueue.main.async { self.status = "Preparing English subtitles \(index + 1)/\(videos.count)…" }
                 var outcome: String
+                var source: URL?
                 do {
                     queue.pending.remove(item.id)
                     readiness.removeValue(forKey: item.id)
-                    let source = try MediaTools.cacheURL(item, stream: nil)
+                    source = try MediaTools.cacheURL(item, stream: nil)
                     let plan = try MediaTools.englishPlan(item, streams: self.inspect(item.url), readyFingerprint: englishReady[item.id])
                     var readyItem = item
                     switch plan {
@@ -314,6 +326,9 @@ final class AppModel: ObservableObject {
                         failures.append("\(item.title): \(reason)")
                     }
                     guard source == (try MediaTools.cacheURL(item, stream: nil)) else { throw MediaTools.failure("Video changed while preparing subtitles; try again after it finishes changing.") }
+                } catch OpenSubtitles.Failure.noMatch where !automatic && !progress.isCancelled {
+                    unresolved += 1; outcome = "Choose an English subtitle"
+                    if let source { picker = SubtitlePicker(item: item, source: source) }
                 } catch OpenSubtitles.Failure.quota {
                     queue.pending.insert(item.id)
                     queue.retryAt = downloads.resetAt ?? queue.retryAt ?? OpenSubtitles.quotaReset(nil)
@@ -328,7 +343,7 @@ final class AppModel: ObservableObject {
             }
             if downloads.remaining == 0 { queue.retryAt = downloads.resetAt ?? queue.retryAt }
             if progress.isCancelled { queue.paused = true }
-            let results = prepared, errors = failures, readyResults = readiness, queuedResults = queue
+            let results = prepared, errors = failures, readyResults = readiness, queuedResults = queue, pendingPicker = picker
             let summary = "\(progress.isCancelled ? "Cancelled: " : "")\(ready) ready · \(extracted) extracted · \(downloaded) downloaded · \(queue.pending.count) queued · \(unresolved) unresolved"
             let quota = downloads.remaining
             DispatchQueue.main.async {
@@ -348,7 +363,85 @@ final class AppModel: ObservableObject {
                 for error in errors { self.log(error) }
                 if !automatic && !errors.isEmpty { self.error = "\(errors.count) videos could not be processed. See Activity for details." }
                 completion?(videos.first.map { readyResults[$0.id] != nil } ?? false)
+                if let pendingPicker, !progress.isCancelled {
+                    self.subtitleQuery = OpenSubtitles.Query(filename: pendingPicker.item.title)
+                    self.subtitleCandidates = []; self.subtitleCandidateID = nil
+                    self.subtitlePicker = pendingPicker
+                    self.searchSubtitleCandidates()
+                }
                 self.prepareNextRequestedVideo()
+            }
+        }
+    }
+
+    func searchSubtitleCandidates() {
+        guard let picker = subtitlePicker, !busy, !shuttingDown else { return }
+        let query = subtitleQuery
+        busy = true; subtitleCandidates = []; subtitleCandidateID = nil
+        subtitleSearchStatus = "Searching OpenSubtitles…"
+        worker.async {
+            let result = Result {
+                guard picker.source == (try MediaTools.cacheURL(picker.item, stream: nil)) else { throw MediaTools.failure("Video changed. Close this picker and search again.") }
+                return try self.makeDownloads().searchCandidates(query)
+            }
+            DispatchQueue.main.async {
+                self.busy = false
+                defer { self.prepareNextRequestedVideo() }
+                guard !self.shuttingDown, self.subtitlePicker?.id == picker.id else { return }
+                switch result {
+                case .success(let candidates):
+                    self.subtitleCandidates = candidates
+                    self.subtitleSearchStatus = candidates.isEmpty ? "No full English subtitles found. Edit the title or episode and search again." : "Choose a release matching your video. Timing is not verified."
+                case .failure(let error): self.subtitleSearchStatus = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func downloadSubtitleCandidate() {
+        guard let picker = subtitlePicker, let fileID = subtitleCandidateID, subtitleCandidates.contains(where: { $0.id == fileID }),
+              let library, library.items[picker.item.id]?.url == picker.item.url, !busy, !shuttingDown else { return }
+        if let retryAt = subtitleQueue.retryAt, retryAt > Date() {
+            subtitleSearchStatus = "Download quota exhausted. Try Download & Use again after \(retryAt.formatted(date: .abbreviated, time: .shortened))."
+            return
+        }
+        busy = true; subtitleSearchStatus = "Downloading selected subtitle…"
+        worker.async {
+            let downloads = self.makeDownloads()
+            let result = Result {
+                guard picker.source == (try MediaTools.cacheURL(picker.item, stream: nil)) else { throw MediaTools.failure("Video changed. Close this picker and search again.") }
+                let subtitle = try downloads.download(picker.item, fileID: fileID)
+                guard picker.source == (try MediaTools.cacheURL(picker.item, stream: nil)) else { throw MediaTools.failure("Video changed during download. Close this picker and search again.") }
+                var item = picker.item; item.subtitle = subtitle
+                return (subtitle, try MediaTools.englishFingerprint(item))
+            }
+            DispatchQueue.main.async {
+                self.busy = false
+                defer { self.prepareNextRequestedVideo() }
+                guard !self.shuttingDown, self.subtitlePicker?.id == picker.id else { return }
+                if downloads.remaining == 0 { self.subtitleQueue.retryAt = downloads.resetAt; self.subtitleQueue.save() }
+                switch result {
+                case .success(let (subtitle, fingerprint)):
+                    guard self.library?.root == library.root, self.library?.items[picker.item.id]?.url == picker.item.url,
+                          picker.source == (try? MediaTools.cacheURL(picker.item, stream: nil)) else {
+                        self.subtitleSearchStatus = "Video changed. Close this picker and search again."; return
+                    }
+                    self.subtitles[picker.item.id] = subtitle; self.library?.items[picker.item.id]?.subtitle = subtitle
+                    self.selectedSubtitleReady[picker.item.id] = fingerprint
+                    self.englishReady.removeValue(forKey: picker.item.id)
+                    UserDefaults.standard.set(self.subtitles.mapValues(\.path), forKey: "subtitles")
+                    UserDefaults.standard.set(self.selectedSubtitleReady, forKey: "selectedSubtitleReady")
+                    UserDefaults.standard.set(self.englishReady, forKey: "englishReady")
+                    self.subtitleQueue.pending.remove(picker.item.id); self.subtitleQueue.save()
+                    self.server.updateSubtitles([picker.item.id: subtitle], root: library.root)
+                    self.subtitleResults[picker.item.id] = "Selected English subtitle ready"
+                    self.status = "Subtitles ready · reopen the video on your TV"
+                    self.log("Downloaded selected English subtitle for \(picker.item.title)")
+                    self.subtitlePicker = nil
+                case .failure(OpenSubtitles.Failure.quota):
+                    self.subtitleSearchStatus = "Download quota exhausted. Your choice has not been downloaded or queued; try Download & Use again after \((downloads.resetAt ?? OpenSubtitles.quotaReset(nil)).formatted(date: .abbreviated, time: .shortened))."
+                case .failure(let error): self.subtitleSearchStatus = error.localizedDescription
+                }
             }
         }
     }

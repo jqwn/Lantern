@@ -94,6 +94,104 @@ import Testing
     try await Task.sleep(nanoseconds: 1_500_000_000)
     #expect(model.library?.videos.isEmpty == true)
     try await selectedAndRequestedPreparationKeepsSharing(directory: directory)
+    try await manualSubtitlePickerRequiresChoiceAndKeepsSharing(directory: directory)
+}
+
+@MainActor private func manualSubtitlePickerRequiresChoiceAndKeepsSharing(directory: URL) async throws {
+    let root = directory.appendingPathComponent("Picker")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    for name in ["Example.Show.S02E03.1080p.WEBRip", "Another.Show.S01E01", "Third.Show.S01E01"] {
+        try Data(repeating: 0, count: 131_072).write(to: root.appendingPathComponent(name + ".mp4"))
+    }
+    let fixture = try SubtitleTests(), defaults = UserDefaults.standard
+    defaults.set(root.path, forKey: "folder"); defaults.set(false, forKey: "sharingEnabled")
+    defaults.removeObject(forKey: "subtitleRetryAt"); defaults.removeObject(forKey: "subtitleQueue")
+    let lock = NSLock()
+    var titles: [String] = [], chosen: [Int] = [], emptySearch = false, quota = false
+    let server = DLNAServer(uuid: UUID().uuidString)
+    let model = AppModel(server: server, inspect: { _ in [] }, makeDownloads: {
+        OpenSubtitles(apiKey: "synthetic-test-key") { request in
+            if request.url?.path == "/api/v1/subtitles" {
+                let parameters = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+                if let title = parameters.first(where: { $0.name == "query" })?.value {
+                    lock.withLock { titles.append(title) }
+                    return (try fixture.search(lock.withLock { emptySearch } ? [] : [fixture.entry(file: 41, hash: false), fixture.entry(file: 42, hash: false)]), fixture.response(request))
+                }
+                return (try fixture.search([]), fixture.response(request))
+            }
+            if request.url?.path == "/api/v1/download" {
+                let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+                lock.withLock { chosen.append(body["file_id"] as! Int) }
+                if lock.withLock({ quota }) { return (Data(#"{"reset_time_utc":"2099-01-01T00:00:00Z"}"#.utf8), fixture.response(request, status: 406)) }
+                return (Data(#"{"link":"https://dl.opensubtitles.com/selected.srt","remaining":4}"#.utf8), fixture.response(request))
+            }
+            return (Data(fixture.srt.utf8), fixture.response(request))
+        }
+    })
+    defer { model.shutdown() }
+    for _ in 0..<200 { if !model.busy { break }; try await Task.sleep(nanoseconds: 10_000_000) }
+    let first = try #require(model.library?.videos.first(where: { $0.title.hasPrefix("Example") }))
+    let second = try #require(model.library?.videos.first(where: { $0.title.hasPrefix("Another") }))
+    let third = try #require(model.library?.videos.first(where: { $0.title.hasPrefix("Third") }))
+    let destination = try MediaTools.cacheURL(first, stream: nil)
+    defer { try? FileManager.default.removeItem(at: destination) }
+    server.start(library: try #require(model.library), interface: LANInterface(name: "lo0", address: "127.0.0.1", mask: inet_addr("255.0.0.0")), port: 0)
+    for _ in 0..<200 { if model.sharing { break }; try await Task.sleep(nanoseconds: 10_000_000) }
+    try #require(model.sharing)
+    let base = model.address
+    model.prepareEnglish(requestedID: first.id)
+    for _ in 0..<200 { if !model.busy { break }; try await Task.sleep(nanoseconds: 10_000_000) }
+    #expect(model.subtitlePicker == nil && model.error == nil)
+    #expect(lock.withLock { titles.isEmpty && chosen.isEmpty })
+    model.selection = first.id; model.prepareEnglish()
+    for _ in 0..<200 { if !model.busy { break }; try await Task.sleep(nanoseconds: 10_000_000) }
+    try #require(model.subtitlePicker?.item.id == first.id)
+    #expect(model.subtitleCandidates.count == 2 && model.subtitleCandidateID == nil)
+    #expect(lock.withLock { titles == ["Example Show"] && chosen.isEmpty })
+    #expect(model.error == nil && model.sharing && model.address == base)
+    model.downloadSubtitleCandidate()
+    #expect(lock.withLock { chosen.isEmpty })
+    lock.withLock { emptySearch = true }
+    model.subtitleQuery.title = "Different Title"; model.searchSubtitleCandidates()
+    for _ in 0..<200 { if !model.busy { break }; try await Task.sleep(nanoseconds: 10_000_000) }
+    #expect(model.subtitleCandidates.isEmpty && model.subtitleSearchStatus.contains("No full English"))
+    model.subtitlePicker = nil; model.downloadSubtitleCandidate()
+    #expect(lock.withLock { chosen.isEmpty })
+    lock.withLock { emptySearch = false }
+    model.prepareEnglish()
+    for _ in 0..<200 { if !model.busy { break }; try await Task.sleep(nanoseconds: 10_000_000) }
+    model.selection = second.id
+    model.subtitleCandidateID = 42; model.downloadSubtitleCandidate()
+    for _ in 0..<200 { if !model.busy { break }; try await Task.sleep(nanoseconds: 10_000_000) }
+    #expect(lock.withLock { chosen == [42] })
+    #expect(model.subtitlePicker == nil && model.library?.items[first.id]?.subtitle == destination)
+    #expect(model.library?.items[second.id]?.subtitle == nil)
+    let session = URLSession(configuration: .ephemeral)
+    defer { session.invalidateAndCancel() }
+    let (_, response) = try await session.data(from: URL(string: "\(base)/media/\(first.id).mp4")!)
+    #expect((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "CaptionInfo.sec") != nil)
+    #expect(lock.withLock { chosen == [42] })
+    #expect(model.sharing && model.address == base)
+    model.selection = third.id; model.prepareEnglish()
+    for _ in 0..<200 { if !model.busy { break }; try await Task.sleep(nanoseconds: 10_000_000) }
+    try #require(model.subtitlePicker?.item.id == third.id)
+    try Data(repeating: 0, count: 131_073).write(to: third.url)
+    model.subtitleCandidateID = 41; model.downloadSubtitleCandidate()
+    for _ in 0..<200 { if !model.busy { break }; try await Task.sleep(nanoseconds: 10_000_000) }
+    #expect(model.subtitleSearchStatus.contains("Video changed"))
+    #expect(lock.withLock { chosen == [42] })
+    model.subtitlePicker = nil
+    model.selection = second.id; model.prepareEnglish()
+    for _ in 0..<200 { if !model.busy { break }; try await Task.sleep(nanoseconds: 10_000_000) }
+    lock.withLock { quota = true }
+    model.subtitleCandidateID = 41; model.downloadSubtitleCandidate()
+    for _ in 0..<200 { if !model.busy { break }; try await Task.sleep(nanoseconds: 10_000_000) }
+    #expect(model.subtitlePicker?.item.id == second.id && model.subtitleCandidateID == 41)
+    #expect(model.subtitleSearchStatus.contains("not been downloaded or queued"))
+    #expect(!SubtitleQueue(defaults: defaults).pending.contains(second.id))
+    model.downloadSubtitleCandidate()
+    #expect(lock.withLock { chosen == [42, 41] })
+    #expect(model.sharing && model.address == base)
 }
 
 @MainActor private func selectedAndRequestedPreparationKeepsSharing(directory: URL) async throws {

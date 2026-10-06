@@ -14,14 +14,46 @@ final class OpenSubtitles {
             let machine_translated: Bool
             let from_trusted: Bool
             let download_count: Int
+            let release: String?
             let feature_details: Feature
             let files: [File]
         }
-        struct Feature: Decodable { let feature_id: Int }
+        struct Feature: Decodable {
+            let feature_id: Int
+            let movie_name: String?
+            let title: String?
+            let season_number: Int?
+            let episode_number: Int?
+        }
         struct File: Decodable { let file_id: Int }
     }
     struct Ticket: Decodable { let link: URL; let remaining: Int; let reset_time_utc: String? }
     struct Quota: Decodable { let reset_time_utc: String? }
+    struct Candidate: Identifiable {
+        let id: Int
+        let release: String
+        let detail: String
+    }
+    struct Query {
+        var title: String
+        var season = ""
+        var episode = ""
+
+        init(filename: String) {
+            let name = filename.replacingOccurrences(of: #"[._]"#, with: " ", options: .regularExpression)
+            let pattern = #"(?i)\bs([0-9]{1,3})e([0-9]{1,3})\b"#
+            let match = try! NSRegularExpression(pattern: pattern).firstMatch(in: name, range: NSRange(name.startIndex..., in: name))
+            if let match, let range = Range(match.range, in: name) {
+                title = String(name[..<range.lowerBound])
+                season = String(Int((name as NSString).substring(with: match.range(at: 1)))!)
+                episode = String(Int((name as NSString).substring(with: match.range(at: 2)))!)
+            } else {
+                let boundary = name.range(of: #"(?i)\s+(?:19\d{2}|20\d{2}|\d{3,4}p|web[ -]?(?:dl|rip)|blu[ -]?ray|brrip|hdtv|[xh]26[45])\b"#, options: .regularExpression)
+                title = String(name[..<(boundary?.lowerBound ?? name.endIndex)])
+            }
+            title = title.replacingOccurrences(of: #"\[[^\]]*\]|\([^)]*\)"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "-([")))
+        }
+    }
     enum Failure: Error, LocalizedError {
         case unavailable(String), noMatch, quota, rateLimit
         var errorDescription: String? {
@@ -29,7 +61,7 @@ final class OpenSubtitles {
             case .unavailable(let message): return message
             case .noMatch: return "No confident full English subtitle match; no download attempted."
             case .quota: return "OpenSubtitles download quota exhausted; queued for automatic retry after reset."
-            case .rateLimit: return "OpenSubtitles is rate-limiting requests. Try Prepare English again later."
+            case .rateLimit: return "OpenSubtitles is rate-limiting requests. Try Find English Subtitles again later."
             }
         }
     }
@@ -111,9 +143,44 @@ final class OpenSubtitles {
         }
     }
 
-    func download(_ item: MediaItem) throws -> URL {
+    func searchCandidates(_ query: Query) throws -> [Candidate] {
+        let title = query.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard title.count >= 3 else { throw Failure.unavailable("Enter a title of at least three characters.") }
+        var parameters = [URLQueryItem(name: "query", value: title), URLQueryItem(name: "languages", value: "en"), URLQueryItem(name: "foreign_parts_only", value: "exclude"), URLQueryItem(name: "ai_translated", value: "exclude"), URLQueryItem(name: "machine_translated", value: "exclude")]
+        for (name, value) in [("season_number", query.season), ("episode_number", query.episode)] where !value.isEmpty {
+            guard let number = Int(value), number >= 0 else { throw Failure.unavailable("Season and episode must be non-negative numbers, or left blank.") }
+            parameters.append(URLQueryItem(name: name, value: String(number)))
+        }
+        var url = URLComponents(string: "https://api.opensubtitles.com/api/v1/subtitles")!
+        url.queryItems = parameters
+        let results = try JSONDecoder().decode(Search.self, from: request(apiRequest(url.url!)))
+        var seen = Set<Int>()
+        return results.data.compactMap { entry in
+            let a = entry.attributes
+            guard a.language == "en", !a.foreign_parts_only, !a.ai_translated, !a.machine_translated, a.files.count == 1,
+                  let file = a.files.first, file.file_id > 0, seen.insert(file.file_id).inserted else { return nil }
+            let f = a.feature_details
+            var detail = [f.movie_name ?? f.title ?? "Unknown title"]
+            if let season = f.season_number, let episode = f.episode_number { detail.append("S\(season) E\(episode)") }
+            if a.hearing_impaired { detail.append("SDH") }
+            if a.from_trusted { detail.append("Trusted uploader") }
+            detail.append("\(a.download_count) downloads")
+            return Candidate(id: file.file_id, release: a.release ?? "Release not supplied", detail: detail.joined(separator: " · "))
+        }
+    }
+
+    func apiRequest(_ url: URL) throws -> URLRequest {
+        guard !apiKey.isEmpty else { throw Failure.unavailable("This build has no OpenSubtitles API key. Local subtitle extraction still works.") }
+        var request = URLRequest(url: url)
+        request.setValue(apiKey, forHTTPHeaderField: "Api-Key")
+        request.setValue("Lantern v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0")", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return request
+    }
+
+    func download(_ item: MediaItem, fileID: Int? = nil) throws -> URL {
         let destination = try MediaTools.cacheURL(item, stream: nil)
-        if FileManager.default.fileExists(atPath: destination.path) {
+        if fileID == nil && FileManager.default.fileExists(atPath: destination.path) {
             _ = try MediaTools.parseSRT(Data(contentsOf: destination, options: .mappedIfSafe))
             return destination
         }
@@ -124,15 +191,18 @@ final class OpenSubtitles {
             throw Failure.unavailable(blocked!)
         }
         do {
-            let hash = try Self.movieHash(item.url)
-            var search = URLRequest(url: URL(string: "https://api.opensubtitles.com/api/v1/subtitles?foreign_parts_only=exclude&languages=en&moviehash=\(hash)&moviehash_match=only")!)
-            search.setValue(apiKey, forHTTPHeaderField: "Api-Key")
-            search.setValue("Lantern v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1.0")", forHTTPHeaderField: "User-Agent")
-            search.setValue("application/json", forHTTPHeaderField: "Accept")
-            let results = try JSONDecoder().decode(Search.self, from: request(search))
-            guard let file = Self.confidentFile(results.data) else { throw Failure.noMatch }
-            var ticketRequest = search
-            ticketRequest.url = URL(string: "https://api.opensubtitles.com/api/v1/download")!
+            let file: Int
+            if let fileID {
+                guard fileID > 0 else { throw Failure.noMatch }
+                file = fileID
+            } else {
+                let hash = try Self.movieHash(item.url)
+                let search = try apiRequest(URL(string: "https://api.opensubtitles.com/api/v1/subtitles?foreign_parts_only=exclude&languages=en&moviehash=\(hash)&moviehash_match=only")!)
+                let results = try JSONDecoder().decode(Search.self, from: request(search))
+                guard let match = Self.confidentFile(results.data) else { throw Failure.noMatch }
+                file = match
+            }
+            var ticketRequest = try apiRequest(URL(string: "https://api.opensubtitles.com/api/v1/download")!)
             ticketRequest.httpMethod = "POST"
             ticketRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
             ticketRequest.httpBody = try JSONSerialization.data(withJSONObject: ["file_id": file, "sub_format": "srt"])

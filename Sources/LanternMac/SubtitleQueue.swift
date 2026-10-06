@@ -24,7 +24,7 @@ struct SubtitleQueue {
     }
 
     var status: String {
-        if paused { return "Queued · paused until Prepare English is clicked" }
+        if paused { return "Queued · paused until Find English Subtitles is clicked" }
         if let retryAt { return "Queued · retries after \(retryAt.formatted(date: .abbreviated, time: .shortened))" }
         return "Queued for automatic retry"
     }

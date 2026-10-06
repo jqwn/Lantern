@@ -94,7 +94,7 @@ struct MainView: View {
                             if let preparation = model.preparation {
                                 Button("Cancel After Current Video") { preparation.cancel() }
                             }
-                            Button("Prepare English") { model.prepareEnglish() }.disabled(model.busy || model.starting || model.selected == nil)
+                            Button("Find English Subtitles") { model.prepareEnglish() }.disabled(model.busy || model.starting || model.selected == nil)
                         }
                         if let item = model.selected {
                             Text(item.title).font(.subheadline).lineLimit(1)
@@ -109,7 +109,7 @@ struct MainView: View {
                         } else {
                             Text("Select a video to prepare its English subtitles ahead of playback or choose a specific track.").font(.callout).foregroundStyle(.secondary)
                         }
-                        Text("Subtitles prepare automatically when the TV requests a video, with at most a five-second wait. If preparation takes longer, reopen the video afterward to pick up subtitles. Sharing stays on. OpenSubtitles receives a video fingerprint, never the video or its filename; downloads over the daily quota queue for retry.")
+                        Text("Subtitles prepare automatically when the TV requests a video, with at most a five-second wait. Reopen the video if preparation takes longer. Automatic searches send only a fingerprint; manual fallback searches also send the title and episode numbers to OpenSubtitles. Videos and folder paths are never sent. Sharing stays on.")
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(16)
                 }.frame(minWidth: 560)
@@ -135,6 +135,39 @@ struct MainView: View {
                 HStack { Text("Activity").font(.title2.bold()); Spacer(); Button("Done") { model.showActivity = false } }
                 ScrollView { Text(model.logs.joined(separator: "\n")).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
             }.padding(20).frame(width: 780, height: 430)
+        }
+        .sheet(item: $model.subtitlePicker) { picker in
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Choose English Subtitles").font(.title2.bold())
+                Text(picker.item.title).lineLimit(2)
+                Text("No confident fingerprint match was found. Search by title, then choose the release closest to your video.").foregroundStyle(.secondary)
+                HStack {
+                    TextField("Show or movie title", text: $model.subtitleQuery.title)
+                    TextField("Season", text: $model.subtitleQuery.season).frame(width: 70)
+                    TextField("Episode", text: $model.subtitleQuery.episode).frame(width: 70)
+                    Button("Search", action: model.searchSubtitleCandidates)
+                }.textFieldStyle(.roundedBorder).disabled(model.busy)
+                Text("Only this title and these episode numbers are sent to OpenSubtitles—not your video or folder path.").font(.caption).foregroundStyle(.secondary)
+                List(selection: $model.subtitleCandidateID) {
+                    ForEach(model.subtitleCandidates) { candidate in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(candidate.release)
+                            Text(candidate.detail).font(.caption).foregroundStyle(.secondary)
+                        }.padding(.vertical, 4).tag(candidate.id)
+                    }
+                }.disabled(model.busy)
+                HStack {
+                    if model.busy { ProgressView().controlSize(.small) }
+                    Text(model.subtitleSearchStatus).font(.callout).textSelection(.enabled)
+                    Spacer()
+                }
+                HStack {
+                    Button("Cancel") { model.subtitlePicker = nil }.keyboardShortcut(.cancelAction).disabled(model.busy)
+                    Spacer()
+                    Button("Download & Use", action: model.downloadSubtitleCandidate)
+                        .buttonStyle(.borderedProminent).disabled(model.busy || model.subtitleCandidateID == nil)
+                }
+            }.padding(20).frame(width: 780, height: 500).interactiveDismissDisabled(model.busy)
         }
     }
 }
