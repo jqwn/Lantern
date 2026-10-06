@@ -120,7 +120,7 @@ final class OpenSubtitles {
         return now.addingTimeInterval(24 * 60 * 60)
     }
 
-    func request(_ request: URLRequest) throws -> Data {
+    func request(_ request: URLRequest, followingCanonicalRedirect: Bool = false) throws -> Data {
         let delay = nextRequest.timeIntervalSinceNow
         if delay > 0 { Thread.sleep(forTimeInterval: delay) }
         nextRequest = Date().addingTimeInterval(0.3)
@@ -129,6 +129,16 @@ final class OpenSubtitles {
         catch { blocked = error.localizedDescription; throw error }
         switch response.statusCode {
         case 200..<300: return data
+        case 301:
+            guard !followingCanonicalRedirect, request.httpMethod == "GET", let original = request.url,
+                  original.scheme == "https", original.host == "api.opensubtitles.com", original.path == "/api/v1/subtitles",
+                  let location = response.value(forHTTPHeaderField: "Location"), let target = URL(string: location, relativeTo: original)?.absoluteURL,
+                  target.scheme == "https", target.host == "api.opensubtitles.com", target.path == original.path,
+                  target.port == nil || target.port == 443, target.user == nil, target.password == nil else {
+                throw Failure.unavailable("OpenSubtitles returned an unsupported search redirect.")
+            }
+            var canonical = request; canonical.url = target
+            return try self.request(canonical, followingCanonicalRedirect: true)
         case 406:
             remaining = 0
             resetAt = Self.quotaReset((try? JSONDecoder().decode(Quota.self, from: data))?.reset_time_utc)

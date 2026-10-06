@@ -245,6 +245,34 @@ final class SubtitleTests {
         #expect(!FileManager.default.fileExists(atPath: try MediaTools.cacheURL(item, stream: nil).path))
     }
 
+    @Test func searchFollowsOnlyOneCanonicalRedirectToTheSameAPIEndpoint() throws {
+        let query = OpenSubtitles.Query(filename: "Example.Show.S01E02")
+        let canonical = "/api/v1/subtitles?episode_number=2&languages=en&query=example+show&season_number=1"
+        for location in [canonical, "https://evil.invalid/api/v1/subtitles", "http://api.opensubtitles.com/api/v1/subtitles", "/api/v1/download", "https://api.opensubtitles.com:444/api/v1/subtitles", "https://user@api.opensubtitles.com/api/v1/subtitles"] {
+            var calls = 0
+            let client = OpenSubtitles(apiKey: "synthetic-test-key") { request in
+                calls += 1
+                if calls == 1 { return (Data(), HTTPURLResponse(url: request.url!, statusCode: 301, httpVersion: "HTTP/1.1", headerFields: ["Location": location])!) }
+                #expect(request.url?.absoluteString == "https://api.opensubtitles.com" + canonical)
+                #expect(request.value(forHTTPHeaderField: "Api-Key") == "synthetic-test-key")
+                return (try self.search([self.entry(hash: false)]), self.response(request))
+            }
+            if location == canonical { #expect(try client.searchCandidates(query).count == 1); #expect(calls == 2) }
+            else { #expect(throws: OpenSubtitles.Failure.self) { try client.searchCandidates(query) }; #expect(calls == 1) }
+        }
+        var loopCalls = 0
+        let loop = OpenSubtitles(apiKey: "synthetic-test-key") { request in
+            loopCalls += 1
+            return (Data(), HTTPURLResponse(url: request.url!, statusCode: 301, httpVersion: "HTTP/1.1", headerFields: ["Location": canonical])!)
+        }
+        #expect(throws: OpenSubtitles.Failure.self) { try loop.searchCandidates(query) }
+        #expect(loopCalls == 2)
+        var post = try loop.apiRequest(URL(string: "https://api.opensubtitles.com/api/v1/download")!)
+        post.httpMethod = "POST"
+        #expect(throws: OpenSubtitles.Failure.self) { try loop.request(post) }
+        #expect(loopCalls == 3)
+    }
+
     @Test func downloadFlowKeepsOriginalsAndCredentialsPrivate() throws {
         let item = try video()
         let original = try Data(contentsOf: item.url)
