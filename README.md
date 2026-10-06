@@ -14,20 +14,20 @@ For a packaged build, open the DMG, drag **Lantern.app** to **Applications**, an
 
 **Samsung tip:** if Lantern does not appear, leave sharing on and restart the TV. This was needed on the Samsung TV tested; other TVs may discover it immediately.
 
-## Optional subtitles
+## Subtitles
 
-If subtitles already work, no preparation is needed. Existing embedded subtitles and same-name `.srt` files are shared automatically.
+Lantern automatically prepares English subtitles when your TV requests a video: it reuses ready subtitles, extracts an English text track, or downloads a confident OpenSubtitles match. Playback waits at most **five seconds**. If preparation takes longer, the video starts without newly prepared subtitles; reopen it afterward to pick them up. Existing embedded subtitles remain available to the TV.
 
-- **Prepare English for Library** uses existing English subtitles, extracts full English text tracks, then automatically downloads confident English matches from OpenSubtitles when needed.
+- **Prepare English** prepares only the selected video ahead of playback.
 - **Use on TV** prepares a selected subtitle track for one video.
 
 Preparation requires FFmpeg/ffprobe, which are not bundled. Downloads require a matching video fingerprint; uncertain matches are left unresolved. Anonymous downloads are limited to 5 per day per IP. Lantern never translates subtitles or changes your originals.
 
 Verified English subtitles are remembered across restarts. Later preparation skips unchanged, ready videos before inspecting their tracks; changed videos or changed/missing subtitles are checked again.
 
-Downloads over the daily limit are **queued**, not failed. Lantern remembers the queue and retries after the provider's reset time while the app is open and the Mac is awake, including after reopening it. If no usable reset time is provided, it waits 24 hours. Automatic retries keep sharing running and make new subtitles available to subsequent TV requests; you may need to reopen a video on the TV to see them. Cancelling preparation pauses automatic retries until you click **Prepare English for Library** again.
+Downloads over the daily limit are **queued**, not failed. Lantern remembers the queue and retries after the provider's reset time while the app is open and the Mac is awake, including after reopening it. If no usable reset time is provided, it waits 24 hours. You may need to reopen a video on the TV to see newly prepared subtitles. Cancelling preparation pauses automatic preparation and retries until you select a video and click **Prepare English** again.
 
-**Prepare before watching:** manual preparation stops sharing until it finishes or is cancelled. Sharing then resumes if it was previously on.
+**Sharing stays on** during all subtitle preparation. An explicit **Use on TV** track choice is preserved while that video/subtitle pair is unchanged; **Prepare English** switches back to English preparation for the selected video.
 
 ## Having trouble?
 

@@ -16,9 +16,20 @@ public final class DLNAServer {
         }, delegateQueue: nil)
     }()
     private let uuid: String
+    private var preparations: [String: VideoPreparation] = [:]
+    private final class VideoPreparation {
+        let identity: String
+        var subtitleIdentity: String
+        var result: Bool?
+        var expired = false
+        var waiters: [(Bool) -> Void] = []
+        var timeout: DispatchWorkItem?
+        init(identity: String, subtitleIdentity: String) { self.identity = identity; self.subtitleIdentity = subtitleIdentity }
+    }
     public var onLog: ((String) -> Void)?
     public var onState: ((Bool, String) -> Void)?
     public var onPlaybackActivity: ((Bool) -> Void)?
+    public var onPrepareVideo: ((MediaItem, @escaping (Bool) -> Void) -> Void)?
 
     public init(uuid: String) { self.uuid = uuid }
 
@@ -63,17 +74,71 @@ public final class DLNAServer {
     public func updateSubtitles(_ subtitles: [String: URL], root: URL) {
         queue.async {
             guard self.library?.root == root, !subtitles.isEmpty else { return }
-            for (id, url) in subtitles { self.library?.items[id]?.subtitle = url }
+            for (id, url) in subtitles {
+                self.library?.items[id]?.subtitle = url
+                if self.preparations[id]?.result != nil { self.preparations.removeValue(forKey: id) }
+            }
             self.library?.revision &+= 1
         }
     }
     private func stopOnQueue() {
         discovery?.stop(); discovery = nil; http?.stop(); http = nil
+        for preparation in preparations.values { preparation.timeout?.cancel(); preparation.waiters.removeAll() }
+        preparations.removeAll()
         subscriptions.removeAll()
         notifications.values.forEach { $0.cancel() }; notifications.removeAll()
     }
 
-    private func respond(_ request: HTTPRequest) -> HTTPResponse {
+    private func subtitleIdentity(_ url: URL?) -> String {
+        var subtitle = url
+        subtitle?.removeAllCachedResourceValues()
+        let values = try? subtitle?.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        return "\(subtitle?.path ?? "")|\(values?.fileSize ?? -1)|\(String((values?.contentModificationDate?.timeIntervalSince1970 ?? 0).bitPattern, radix: 16))"
+    }
+
+    private func prepareVideo(_ item: MediaItem, completion: @escaping (Bool) -> Void) {
+        guard let onPrepareVideo else { completion(true); return }
+        var source = item.url
+        source.removeAllCachedResourceValues()
+        guard let values = try? source.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey]) else { completion(false); return }
+        let identity = "\(values.fileSize ?? 0)|\(String((values.contentModificationDate?.timeIntervalSince1970 ?? 0).bitPattern, radix: 16))"
+        let subtitleIdentity = subtitleIdentity(item.subtitle)
+        if let existing = preparations[item.id], existing.identity == identity, existing.subtitleIdentity == subtitleIdentity {
+            if let result = existing.result { completion(result) }
+            else if existing.expired { completion(false) }
+            else { existing.waiters.append(completion) }
+            return
+        }
+        if let old = preparations.removeValue(forKey: item.id) {
+            old.timeout?.cancel()
+            let waiters = old.waiters; old.waiters.removeAll()
+            waiters.forEach { $0(false) }
+        }
+        let preparation = VideoPreparation(identity: identity, subtitleIdentity: subtitleIdentity)
+        preparation.waiters.append(completion)
+        preparations[item.id] = preparation
+        let timeout = DispatchWorkItem { [weak self, weak preparation] in
+            guard let self, let preparation, self.preparations[item.id] === preparation, preparation.result == nil else { return }
+            preparation.expired = true
+            let waiters = preparation.waiters; preparation.waiters.removeAll()
+            waiters.forEach { $0(false) }
+        }
+        preparation.timeout = timeout
+        queue.asyncAfter(deadline: .now() + 5, execute: timeout)
+        onPrepareVideo(item) { [weak self, weak preparation] ready in
+            guard let self else { return }
+            self.queue.async {
+                guard let preparation, self.preparations[item.id] === preparation, preparation.result == nil else { return }
+                preparation.result = ready
+                preparation.subtitleIdentity = self.subtitleIdentity(self.library?.items[item.id]?.subtitle)
+                preparation.timeout?.cancel(); preparation.timeout = nil
+                let waiters = preparation.waiters; preparation.waiters.removeAll()
+                waiters.forEach { $0(ready) }
+            }
+        }
+    }
+
+    private func respond(_ request: HTTPRequest, prepare: Bool = true, includeSubtitle: Bool = true) -> HTTPResponse {
         guard let library else { return HTTPResponse(503) }
         if request.method == "SUBSCRIBE" || request.method == "UNSUBSCRIBE" { return subscribe(request) }
         if request.method == "POST" {
@@ -104,9 +169,18 @@ public final class DLNAServer {
         let resolved = item.url.resolvingSymlinksInPath()
         guard resolved == item.url.standardizedFileURL, resolved.path.hasPrefix(library.root.path + "/") else { return HTTPResponse(404) }
         var headers = ["transferMode.dlna.org": "Streaming", "contentFeatures.dlna.org": "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"]
-        if item.subtitle != nil { headers["CaptionInfo.sec"] = "\(base)/subtitles/\(item.id).srt" }
+        if includeSubtitle && item.subtitle != nil { headers["CaptionInfo.sec"] = "\(base)/subtitles/\(item.id).srt" }
         onLog?("\(request.method) \(item.title)\(request.headers["range"].map { " · \($0)" } ?? "")")
-        return HTTPResponse.stream(url: item.url, type: item.mime, request: request, headers: headers)
+        var response = HTTPResponse.stream(url: item.url, type: item.mime, request: request, headers: headers)
+        if prepare && onPrepareVideo != nil && response.file != nil && response.count > 0 {
+            response.deferred = { [weak self] complete in
+                guard let self else { complete(HTTPResponse(503)); return }
+                self.prepareVideo(item) { [weak self] ready in
+                    complete(self?.respond(request, prepare: false, includeSubtitle: ready) ?? HTTPResponse(503))
+                }
+            }
+        }
+        return response
     }
 
     private func subscribe(_ request: HTTPRequest) -> HTTPResponse {

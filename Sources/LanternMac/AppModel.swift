@@ -24,10 +24,13 @@ final class AppModel: ObservableObject {
     @Published var subtitleResults: [String: String] = [:]
     private var subtitles: [String: URL] = [:]
     private var englishReady = UserDefaults.standard.dictionary(forKey: "englishReady") as? [String: String] ?? [:]
+    private var selectedSubtitleReady = UserDefaults.standard.dictionary(forKey: "selectedSubtitleReady") as? [String: String] ?? [:]
     private var subtitleQueue = SubtitleQueue()
     private var subtitleRetryTimer: Timer?
     private var activity: NSObjectProtocol?
     private let server: DLNAServer
+    private let inspect: (URL) throws -> [MediaStream]
+    private let makeDownloads: () -> OpenSubtitles
     private let worker = DispatchQueue(label: "Lantern.media", qos: .userInitiated)
     private var inspection = UUID()
     private var restoreSharing = UserDefaults.standard.object(forKey: "sharingEnabled") as? Bool ?? true
@@ -35,19 +38,31 @@ final class AppModel: ObservableObject {
     private var watchedFolder: URL?
     private var libraryRefreshTimer: Timer?
     private var shuttingDown = false
+    private var requestedVideos: [(String, (Bool) -> Void)] = []
 
     var videos: [MediaItem] { (library?.videos ?? []).filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) } }
     var selected: MediaItem? { selection.flatMap { library?.items[$0] } }
     var textTracks: [MediaStream] { streams.filter(\.isTextSubtitle) }
 
-    init() {
+    init(server: DLNAServer? = nil, inspect: @escaping (URL) throws -> [MediaStream] = { try MediaTools.inspect($0) }, makeDownloads: @escaping () -> OpenSubtitles = { OpenSubtitles() }) {
+        self.inspect = inspect; self.makeDownloads = makeDownloads
         folder = URL(fileURLWithPath: UserDefaults.standard.string(forKey: "folder") ?? NSHomeDirectory() + "/Downloads/Videos")
         subtitles = (UserDefaults.standard.dictionary(forKey: "subtitles") as? [String: String] ?? [:]).mapValues { URL(fileURLWithPath: $0) }
         let uuid = UserDefaults.standard.string(forKey: "uuid") ?? UUID().uuidString.lowercased()
         UserDefaults.standard.set(uuid, forKey: "uuid")
-        server = DLNAServer(uuid: uuid)
+        self.server = server ?? DLNAServer(uuid: uuid)
+        let server = self.server
         interfaceID = UserDefaults.standard.string(forKey: "sharingInterface") ?? interfaces.first?.id ?? ""
         server.onLog = { [weak self] message in DispatchQueue.main.async { self?.log(message) } }
+        server.onPrepareVideo = { [weak self] item, complete in
+            DispatchQueue.main.async {
+                guard let self, !self.shuttingDown, self.sharing, self.library?.items[item.id]?.url == item.url else { complete(false); return }
+                if let current = self.library?.items[item.id], let fingerprint = try? MediaTools.englishFingerprint(current),
+                   fingerprint == self.englishReady[item.id] || fingerprint == self.selectedSubtitleReady[item.id] { complete(true); return }
+                self.requestedVideos.append((item.id, complete))
+                self.prepareNextRequestedVideo()
+            }
+        }
         server.onPlaybackActivity = { [weak self] active in
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -62,6 +77,7 @@ final class AppModel: ObservableObject {
                 self.status = running ? "Visible to TVs on your network" : message
                 self.address = running ? message : ""
                 self.log(message)
+                self.prepareNextRequestedVideo()
             }
         }
         refresh()
@@ -131,6 +147,7 @@ final class AppModel: ObservableObject {
             DispatchQueue.main.async {
                 guard !self.shuttingDown else { return }
                 self.busy = false
+                defer { self.prepareNextRequestedVideo() }
                 switch result {
                 case .success(let library):
                     if automatic && self.library?.items == library.items { return }
@@ -171,9 +188,13 @@ final class AppModel: ObservableObject {
         if remember { UserDefaults.standard.set(false, forKey: "sharingEnabled") }
         restoreSharing = false
         server.stop(); sharing = false; starting = false
+        let requests = requestedVideos; requestedVideos.removeAll()
+        requests.forEach { $0.1(false) }
     }
     func shutdown() {
         shuttingDown = true
+        let requests = requestedVideos; requestedVideos.removeAll()
+        requests.forEach { $0.1(false) }
         folderWatcher?.stop(); libraryRefreshTimer?.invalidate(); subtitleRetryTimer?.invalidate()
         server.shutdown()
     }
@@ -184,7 +205,7 @@ final class AppModel: ObservableObject {
         guard let item = selected else { detailStatus = "Select a video to inspect its tracks."; return }
         detailStatus = "Reading audio and subtitle tracks…"
         worker.async {
-            let result = Result { try MediaTools.inspect(item.url) }
+            let result = Result { try self.inspect(item.url) }
             DispatchQueue.main.async {
                 guard self.inspection == token else { return }
                 switch result {
@@ -202,13 +223,13 @@ final class AppModel: ObservableObject {
 
     func prepareSelected() {
         guard let item = selected, subtitleIndex >= 0, !busy else { return }
-        let index = subtitleIndex, resume = sharing
-        if sharing { stop(remember: false) }
+        let index = subtitleIndex, root = library?.root
         busy = true; status = "Preparing subtitles…"
         worker.async {
             let result = Result { try MediaTools.extract(item, stream: index) }
             DispatchQueue.main.async {
                 self.busy = false
+                defer { self.prepareNextRequestedVideo() }
                 switch result {
                 case .success(let url):
                     self.subtitles[item.id] = url; self.library?.items[item.id]?.subtitle = url
@@ -216,27 +237,44 @@ final class AppModel: ObservableObject {
                     self.status = "Subtitles ready"; self.log("Prepared subtitles for \(item.title)")
                     self.subtitleResults[item.id] = "Selected subtitles ready"
                     self.subtitleQueue.pending.remove(item.id); self.subtitleQueue.save()
+                    if let current = self.library?.items[item.id] { self.selectedSubtitleReady[item.id] = try? MediaTools.englishFingerprint(current) }
+                    UserDefaults.standard.set(self.selectedSubtitleReady, forKey: "selectedSubtitleReady")
+                    if let root { self.server.updateSubtitles([item.id: url], root: root) }
                 case .failure(let error): self.error = error.localizedDescription; self.status = "Subtitle preparation failed"
                 }
-                if resume { self.start() }
             }
         }
     }
 
-    func prepareEnglish(queuedOnly: Bool = false) {
-        guard let library, !busy, !starting else { return }
-        let videos = queuedOnly ? subtitleQueue.due(in: library.videos) : library.videos
-        guard !videos.isEmpty else { return }
-        let resume = sharing && !queuedOnly
-        if resume { stop(remember: false) }
+    func prepareNextRequestedVideo() {
+        guard !shuttingDown, !busy, !starting, !requestedVideos.isEmpty else { return }
+        let (id, complete) = requestedVideos.removeFirst()
+        if let item = library?.items[id], let fingerprint = try? MediaTools.englishFingerprint(item),
+           fingerprint == englishReady[id] || fingerprint == selectedSubtitleReady[id] {
+            complete(true); prepareNextRequestedVideo(); return
+        }
+        guard !subtitleQueue.paused, library?.items[id] != nil else {
+            complete(false); prepareNextRequestedVideo(); return
+        }
+        prepareEnglish(requestedID: id, completion: complete)
+    }
+
+    func prepareEnglish(queuedOnly: Bool = false, requestedID: String? = nil, completion: ((Bool) -> Void)? = nil) {
+        guard let library, !busy, !starting, !shuttingDown else { completion?(false); return }
+        let videos = queuedOnly ? subtitleQueue.due(in: library.videos) : (requestedID ?? selection).flatMap { library.items[$0] }.map { [$0] } ?? []
+        guard !videos.isEmpty else { completion?(false); return }
+        let automatic = queuedOnly || requestedID != nil
         busy = true
-        if !queuedOnly { subtitleQueue.paused = false }
+        if !automatic {
+            subtitleQueue.paused = false
+            for item in videos { selectedSubtitleReady.removeValue(forKey: item.id) }
+            UserDefaults.standard.set(selectedSubtitleReady, forKey: "selectedSubtitleReady")
+        }
         let englishReady = englishReady, subtitleQueue = subtitleQueue
         let progress = Progress(totalUnitCount: Int64(videos.count))
         preparation = progress
-        if !queuedOnly { subtitleResults = [:] }
         worker.async {
-            let downloads = OpenSubtitles()
+            let downloads = self.makeDownloads()
             var prepared: [String: URL] = [:]
             var readiness = englishReady
             var queue = subtitleQueue
@@ -249,11 +287,13 @@ final class AppModel: ObservableObject {
                 do {
                     queue.pending.remove(item.id)
                     readiness.removeValue(forKey: item.id)
-                    let plan = try MediaTools.englishPlan(item, streams: MediaTools.inspect(item.url), readyFingerprint: englishReady[item.id])
+                    let source = try MediaTools.cacheURL(item, stream: nil)
+                    let plan = try MediaTools.englishPlan(item, streams: self.inspect(item.url), readyFingerprint: englishReady[item.id])
                     var readyItem = item
                     switch plan {
                     case .ready:
                         readiness[item.id] = try MediaTools.englishFingerprint(item)
+                        if let subtitle = item.subtitle { prepared[item.id] = subtitle }
                         ready += 1; outcome = "English subtitles ready"
                     case .extract(let track):
                         let subtitle = try MediaTools.extract(item, stream: track)
@@ -273,11 +313,13 @@ final class AppModel: ObservableObject {
                         unresolved += 1; outcome = "Needs review"
                         failures.append("\(item.title): \(reason)")
                     }
+                    guard source == (try MediaTools.cacheURL(item, stream: nil)) else { throw MediaTools.failure("Video changed while preparing subtitles; try again after it finishes changing.") }
                 } catch OpenSubtitles.Failure.quota {
                     queue.pending.insert(item.id)
                     queue.retryAt = downloads.resetAt ?? queue.retryAt ?? OpenSubtitles.quotaReset(nil)
                     outcome = queue.status
                 } catch {
+                    prepared.removeValue(forKey: item.id); readiness.removeValue(forKey: item.id)
                     unresolved += 1; outcome = "English subtitles unresolved"
                     failures.append("\(item.title): \(error.localizedDescription)")
                 }
@@ -290,21 +332,23 @@ final class AppModel: ObservableObject {
             let summary = "\(progress.isCancelled ? "Cancelled: " : "")\(ready) ready · \(extracted) extracted · \(downloaded) downloaded · \(queue.pending.count) queued · \(unresolved) unresolved"
             let quota = downloads.remaining
             DispatchQueue.main.async {
+                guard !self.shuttingDown else { completion?(false); return }
                 for (id, url) in results { self.subtitles[id] = url; self.library?.items[id]?.subtitle = url }
                 UserDefaults.standard.set(self.subtitles.mapValues(\.path), forKey: "subtitles")
                 self.englishReady = readyResults
                 UserDefaults.standard.set(readyResults, forKey: "englishReady")
                 self.subtitleQueue = queuedResults; self.subtitleQueue.save()
                 for id in self.subtitleQueue.pending { self.subtitleResults[id] = self.subtitleQueue.status }
-                if queuedOnly { self.server.updateSubtitles(results, root: library.root) }
+                self.server.updateSubtitles(results, root: library.root)
                 self.busy = false; self.preparation = nil
                 self.status = summary
                 self.log(self.status)
                 if !self.subtitleQueue.pending.isEmpty { self.log(self.subtitleQueue.status) }
                 if let quota { self.log("OpenSubtitles reports \(quota) downloads remaining for this IP today") }
                 for error in errors { self.log(error) }
-                if !errors.isEmpty { self.error = "\(errors.count) videos could not be processed. See Activity for details." }
-                if resume { self.start() }
+                if !automatic && !errors.isEmpty { self.error = "\(errors.count) videos could not be processed. See Activity for details." }
+                completion?(videos.first.map { readyResults[$0.id] != nil } ?? false)
+                self.prepareNextRequestedVideo()
             }
         }
     }

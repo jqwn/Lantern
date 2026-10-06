@@ -94,7 +94,7 @@ struct MainView: View {
                             if let preparation = model.preparation {
                                 Button("Cancel After Current Video") { preparation.cancel() }
                             }
-                            Button("Prepare English for Library") { model.prepareEnglish() }.disabled(model.busy || model.starting || model.library == nil)
+                            Button("Prepare English") { model.prepareEnglish() }.disabled(model.busy || model.starting || model.selected == nil)
                         }
                         if let item = model.selected {
                             Text(item.title).font(.subheadline).lineLimit(1)
@@ -107,9 +107,9 @@ struct MainView: View {
                                 Button("Use on TV", action: model.prepareSelected).disabled(model.busy || model.starting || model.subtitleIndex < 0)
                             }
                         } else {
-                            Text("Prepare English extracts full English text tracks first, then downloads confident OpenSubtitles matches for videos that need them.").font(.callout).foregroundStyle(.secondary)
+                            Text("Select a video to prepare its English subtitles ahead of playback or choose a specific track.").font(.callout).foregroundStyle(.secondary)
                         }
-                        Text("Online searches send a video fingerprint to OpenSubtitles, never the video or its filename. Anonymous downloads are limited to 5 per day per IP; excess downloads queue and retry automatically after reset while Lantern is open. Unchanged ready videos are skipped. Manual preparation restarts sharing; automatic retries keep it running.")
+                        Text("Subtitles prepare automatically when the TV requests a video, with at most a five-second wait. If preparation takes longer, reopen the video afterward to pick up subtitles. Sharing stays on. OpenSubtitles receives a video fingerprint, never the video or its filename; downloads over the daily quota queue for retry.")
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(16)
                 }.frame(minWidth: 560)

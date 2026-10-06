@@ -26,7 +26,7 @@ Open **Activity** for the file-specific error. The batch can fail for some files
 
 FFmpeg and ffprobe must be installed for inspection and extraction; they are not bundled with Lantern. Ordinary video sharing does not need them. A media-tool process receives a termination request after two minutes. A malformed or incomplete video can fail before its subtitle tracks are readable; verify that file in your download app or another player rather than changing the original through Lantern.
 
-Whole-library preparation can take time. **Cancel After Current Video** stops the batch between files. Preparation stops active sharing and restarts it afterward, so prepare before watching. Refreshing the library also restarts active sharing.
+Playback-triggered preparation waits at most five seconds before serving the video without newly prepared subtitles. Preparation continues in the background; reopen the video after it finishes. **Prepare English** works on the selected video only, and all subtitle preparation keeps sharing running. **Cancel After Current Video** lets the current operation finish and pauses further automatic preparation and queued retries until **Prepare English** is clicked again. Manual library refresh still restarts active sharing.
 
 ## Subtitles do not appear or look different
 
@@ -37,11 +37,11 @@ Whole-library preparation can take time. **Cancel After Current Video** stops th
 - PGS/VobSub image subtitles are not converted or OCR'd. This build does not burn subtitles into the video.
 - If the TV caches old subtitle information, reopen Lantern in the TV's source browser after preparing subtitles.
 
-**Prepare English for Library** prefers full English text tracks over forced/foreign-dialogue-only tracks. SDH tracks are also usable. Track language and forced flags depend on the file's metadata; missing or inaccurate tags cannot always be resolved automatically. Existing external SRT language is checked locally; short or uncertain text is left for review rather than assumed English. **Use on TV** remains an explicit choice of any available text track.
+Automatic preparation and **Prepare English** prefer full English text tracks over forced/foreign-dialogue-only tracks. SDH tracks are also usable. Track language and forced flags depend on the file's metadata; missing or inaccurate tags cannot always be resolved automatically. Existing external SRT language is checked locally; short or uncertain text is left for review rather than assumed English. **Use on TV** remains an explicit choice of any available text track and is not replaced automatically while the video/subtitle pair is unchanged.
 
 When no usable local English text subtitle is available, preparation searches OpenSubtitles using its file-hash fingerprint. It downloads only English, non-forced, non-machine/AI-translated results explicitly matched to that fingerprint, with one subtitle file and no conflicting movie/episode identities. It does not guess from filenames. Provider metadata can still be wrong, so a match is not a guarantee of perfect timing.
 
-**Activity** and the per-video status explain unresolved items. No match means nothing is downloaded. Quota/rate-limit or service failures stop further online attempts for that batch, while local extraction continues. Anonymous access permits 5 downloads per day per public IP; other apps sharing that IP may use the same allowance. After a reset, click **Prepare English for Library** again; already prepared files are reused. There is no background retry or automatic login. This build does not provide account sign-in for a higher quota.
+**Activity** and the per-video status explain unresolved items. No match means nothing is downloaded. Repeated TV requests share a preparation attempt instead of repeatedly downloading. For an unresolved video, select it and click **Prepare English** to retry manually. Downloads over the daily quota retry automatically after reset while Lantern is open and awake. Anonymous access permits 5 downloads per day per public IP; other apps sharing that IP may use the same allowance. This build does not provide account sign-in for a higher quota.
 
 Official branch/tag builds include Lantern's developer API key. Pull-request and unconfigured source builds omit it; these can extract subtitles but report that online downloads are unavailable. No end-user API-key setup is required for official builds. Downloads are limited to 8 MB, must be valid UTF-8 SRT, and go into the cache rather than beside your originals.
 

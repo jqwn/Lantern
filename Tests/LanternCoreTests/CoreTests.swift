@@ -135,6 +135,9 @@ final class CoreTests {
         #expect(response.headers["Content-Range"] == "bytes 2-4/10")
         let invalid = HTTPRequest(method: "GET", path: "/media/sample.mp4", headers: ["range": "bytes=10-"], body: Data())
         #expect(HTTPResponse.stream(url: file, type: "video/mp4", request: invalid).status == 416)
+        _ = try file.resourceValues(forKeys: [.fileSizeKey])
+        try Data("0123456789abcdef".utf8).write(to: file)
+        #expect(HTTPResponse.stream(url: file, type: "video/mp4", request: invalid).count == 6)
     }
 
     @Test func liveCatalogueAndSubtitlesDoNotInterruptStreaming() async throws {

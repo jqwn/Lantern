@@ -17,6 +17,7 @@ public struct HTTPResponse {
     public var offset: UInt64 = 0
     public var count: UInt64 = 0
     var isLibraryBrowse = false
+    var deferred: ((@escaping (HTTPResponse) -> Void) -> Void)?
 
     public init(_ status: Int = 200, text: String = "", type: String = "text/xml; charset=utf-8", headers: [String: String] = [:]) {
         self.status = status
@@ -27,7 +28,9 @@ public struct HTTPResponse {
 
     public static func stream(url: URL, type: String, request: HTTPRequest, headers: [String: String] = [:]) -> HTTPResponse {
         do {
-            let size = UInt64(try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
+            var source = url
+            source.removeAllCachedResourceValues()
+            let size = UInt64(try source.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
             let range = try ByteRange.parse(request.headers["range"], size: size)
             var result = HTTPResponse(range == nil ? 200 : 206, type: type, headers: headers)
             result.file = url
@@ -140,6 +143,7 @@ private final class HTTPClient {
     var timer: DispatchSourceTimer?
     var closed = false
     var playbackRequestActive = false
+    var awaitingResponse = false
 
     init(connection: NWConnection, queue: DispatchQueue, handler: @escaping (HTTPRequest) -> HTTPResponse, playbackRequest: @escaping (Bool) -> Void, finished: @escaping () -> Void) {
         self.connection = connection; self.queue = queue; self.handler = handler; self.playbackRequest = playbackRequest; self.finished = finished
@@ -189,6 +193,19 @@ private final class HTTPClient {
     }
 
     func send(_ response: HTTPResponse, head: Bool) {
+        guard !closed else { return }
+        if let deferred = response.deferred {
+            awaitingResponse = true
+            deferred { [weak self] response in
+                guard let self else { return }
+                self.queue.async {
+                    guard !self.closed, self.awaitingResponse else { return }
+                    self.awaitingResponse = false
+                    self.send(response, head: head)
+                }
+            }
+            return
+        }
         var response = response
         if let url = response.file, !head {
             do { file = try FileHandle(forReadingFrom: url); try file?.seek(toOffset: response.offset) }
